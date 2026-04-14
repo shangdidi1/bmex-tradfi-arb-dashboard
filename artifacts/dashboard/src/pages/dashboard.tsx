@@ -1,9 +1,8 @@
 import { useState, useEffect, useMemo } from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import { useGetArbSummary, useGetArbDetail, getGetArbDetailQueryKey } from "@workspace/api-client-react";
-import type { ArbPairSummary, ArbTimeSeriesPoint, ArbPairSummarySuggestion } from "@workspace/api-client-react/src/generated/api.schemas";
+import { useGetArbSummary, useGetArbDetail, getGetArbSummaryQueryKey, getGetArbDetailQueryKey } from "@workspace/api-client-react";
+import type { ArbPairSummary } from "@workspace/api-client-react";
 import {
-  AreaChart, Area, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, ReferenceLine
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area, ReferenceLine
 } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -37,8 +36,6 @@ function formatDate(dateStr: string, fmt = "MMM d, HH:mm"): string {
   return format(new Date(dateStr), fmt);
 }
 
-// --- Tooltips & Legends ---
-
 function CustomTooltip({ active, payload, label }: any) {
   if (!active || !payload || payload.length === 0) return null;
   return (
@@ -55,28 +52,30 @@ function CustomTooltip({ active, payload, label }: any) {
       <div style={{ marginBottom: "6px", fontWeight: 500 }}>
         {label}
       </div>
-      {payload.map((entry: any, index: number) => (
-        <div key={index} style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "3px" }}>
-          {entry.color && entry.color !== "#ffffff" && (
-            <span style={{ display: "inline-block", width: "10px", height: "10px", borderRadius: "2px", backgroundColor: entry.color, flexShrink: 0 }} />
-          )}
-          <span style={{ color: "#9ca3af" }}>{entry.name}</span>
-          <span style={{ marginLeft: "auto", fontWeight: 600 }}>
-            {typeof entry.value === "number" ? formatPercent(entry.value * 100) : entry.value}
-          </span>
-        </div>
-      ))}
+      {payload.map((entry: any, index: number) => {
+        if (entry.value === null || entry.value === undefined) return null;
+        return (
+          <div key={index} style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "3px" }}>
+            {entry.color && entry.color !== "#ffffff" && (
+              <span style={{ display: "inline-block", width: "10px", height: "10px", borderRadius: "2px", backgroundColor: entry.color, flexShrink: 0 }} />
+            )}
+            <span style={{ color: "#9ca3af" }}>{entry.name}</span>
+            <span style={{ marginLeft: "auto", fontWeight: 600 }}>
+              {typeof entry.value === "number" ? formatPercent(entry.value) : entry.value}
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 }
 
-// --- Dashboard Component ---
-
 export default function Dashboard() {
-  const queryClient = useQueryClient();
-  const { data, isLoading, isFetching, dataUpdatedAt, refetch } = useGetArbSummary();
+  const { data, isLoading, isFetching, dataUpdatedAt, refetch } = useGetArbSummary({
+    query: { queryKey: getGetArbSummaryQueryKey(), refetchInterval: 300_000 }
+  });
   const summaryData = data?.pairs || [];
-  
+
   const [selectedPairId, setSelectedPairId] = useState<string | null>(null);
 
   const [sorting, setSorting] = useState<SortingState>([
@@ -125,8 +124,11 @@ export default function Dashboard() {
     },
     {
       accessorKey: "cumulativeYield",
-      header: "Yield (14d)",
-      cell: ({ row }) => <span className="font-mono">{formatPercent(row.original.cumulativeYield)}</span>
+      header: "Ann. Yield",
+      cell: ({ row }) => {
+        const annualizedYield = row.original.cumulativeYield * (365 / 14);
+        return <span className="font-mono">{formatPercent(annualizedYield)}</span>;
+      }
     },
     {
       accessorKey: "suggestion",
@@ -169,21 +171,21 @@ export default function Dashboard() {
   useEffect(() => {
     if (loading) {
       setIsSpinning(true);
-    } else {
-      const t = setTimeout(() => setIsSpinning(false), 600);
-      return () => clearTimeout(t);
+      return;
     }
+    const t = setTimeout(() => setIsSpinning(false), 600);
+    return () => clearTimeout(t);
   }, [loading]);
 
   return (
     <div className="min-h-screen bg-[#0f111a] text-gray-200 px-5 py-4 pt-[32px] pb-[32px] pl-[24px] pr-[24px]">
       <div className="max-w-[1400px] mx-auto space-y-6">
-        
+
         {/* Header */}
         <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
           <div className="pt-2">
             <h1 className="font-bold text-[32px] flex items-center gap-3">
-              <span className="text-[#FF6D00]">BitMEX</span> 
+              <span className="text-[#FF6D00]">BitMEX</span>
               <span>TradFi Perps Arbitrage Monitor</span>
             </h1>
             <p className="text-gray-400 mt-1.5 text-[14px]">Compare TradFi perpetual contracts with Hyperliquid to find low-cost funding venues.</p>
@@ -249,7 +251,7 @@ export default function Dashboard() {
                       <TableHead key={header.id} onClick={header.column.getToggleSortingHandler()} className="cursor-pointer select-none text-gray-400 font-semibold h-12 bg-[#141824]">
                         <div className="flex items-center gap-2">
                           {flexRender(header.column.columnDef.header, header.getContext())}
-                          {{ asc: " 🔼", desc: " 🔽" }[header.column.getIsSorted() as string] ?? null}
+                          {{ asc: " ▲", desc: " ▼" }[header.column.getIsSorted() as string] ?? null}
                         </div>
                       </TableHead>
                     ))}
@@ -267,8 +269,8 @@ export default function Dashboard() {
                   ))
                 ) : (
                   table.getRowModel().rows.map((row) => (
-                    <TableRow 
-                      key={row.id} 
+                    <TableRow
+                      key={row.id}
                       className="border-gray-800 cursor-pointer hover:bg-[#22283a] transition-colors"
                       onClick={() => setSelectedPairId(row.original.pairId)}
                     >
@@ -294,11 +296,11 @@ export default function Dashboard() {
 
       </div>
 
-      {/* Detail View Modal/Slide-over */}
+      {/* Detail View Slide-over */}
       {selectedPairId && (
-        <DetailView 
-          pairId={selectedPairId} 
-          onClose={() => setSelectedPairId(null)} 
+        <DetailView
+          pairId={selectedPairId}
+          onClose={() => setSelectedPairId(null)}
           summary={summaryData.find(d => d.pairId === selectedPairId)}
         />
       )}
@@ -307,32 +309,43 @@ export default function Dashboard() {
 }
 
 function DetailView({ pairId, onClose, summary }: { pairId: string, onClose: () => void, summary?: ArbPairSummary }) {
-  const { data, isLoading, isFetching } = useGetArbDetail(pairId, { 
-    query: { enabled: !!pairId, queryKey: getGetArbDetailQueryKey(pairId) } 
+  const { data, isLoading, isFetching } = useGetArbDetail(pairId, {
+    query: {
+      enabled: !!pairId,
+      queryKey: getGetArbDetailQueryKey(pairId),
+      refetchInterval: 300_000,
+    }
   });
 
   const loading = isLoading || isFetching;
   const detailSummary = data?.summary || summary;
-  
-  // Downsample time series to ~200 points for performance
+
   const rawSeries = data?.timeSeries || [];
+
   const timeSeries = useMemo(() => {
-    if (rawSeries.length <= 200) return rawSeries;
-    const step = Math.floor(rawSeries.length / 200);
-    return rawSeries.filter((_, i) => i % step === 0);
+    const series = rawSeries.length <= 200
+      ? rawSeries
+      : rawSeries.filter((_, i) => i % Math.floor(rawSeries.length / 200) === 0);
+    return series.map(pt => ({
+      ...pt,
+      spreadNeg: pt.fundingSpread < 0 ? pt.fundingSpread : null,
+      spreadPos: pt.fundingSpread >= 0 ? pt.fundingSpread : null,
+    }));
   }, [rawSeries]);
+
+  const annualizedYield = detailSummary ? detailSummary.cumulativeYield * (365 / 14) : 0;
 
   const gridColor = "rgba(255,255,255,0.05)";
   const tickColor = "#6b7280";
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-sm">
-      <div className="w-full max-w-[800px] h-full bg-[#0f111a] border-l border-gray-800 flex flex-col shadow-2xl transform transition-transform animate-in slide-in-from-right">
-        
+      <div className="w-full max-w-[800px] h-full bg-[#0f111a] border-l border-gray-800 flex flex-col shadow-2xl">
+
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-gray-800 bg-[#141824]">
           <div>
-            <h2 className="text-2xl font-bold text-gray-100 flex items-center gap-3">
+            <h2 className="text-2xl font-bold text-gray-100">
               {detailSummary?.name || "Asset Details"}
             </h2>
             <div className="text-sm text-gray-400 mt-1 flex items-center gap-4">
@@ -347,29 +360,29 @@ function DetailView({ pairId, onClose, summary }: { pairId: string, onClose: () 
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          
+
           {/* Suggestion Card */}
           {detailSummary && (
             <Card className={`border ${detailSummary.suggestion === "LONG_BITMEX_SHORT_HL" ? "border-green-500/30 bg-green-500/5" : detailSummary.suggestion === "LONG_HL_SHORT_BITMEX" ? "border-yellow-500/30 bg-yellow-500/5" : "border-gray-800 bg-[#1a1f2e]"}`}>
               <CardContent className="p-6">
                 <div className="flex items-start gap-4">
                   {detailSummary.suggestion === "LONG_BITMEX_SHORT_HL" ? (
-                    <TrendingUp className="w-8 h-8 text-green-500 mt-1" />
+                    <TrendingUp className="w-8 h-8 text-green-500 mt-1 shrink-0" />
                   ) : detailSummary.suggestion === "LONG_HL_SHORT_BITMEX" ? (
-                    <TrendingUp className="w-8 h-8 text-yellow-500 mt-1" />
+                    <TrendingUp className="w-8 h-8 text-yellow-500 mt-1 shrink-0" />
                   ) : (
-                    <Info className="w-8 h-8 text-gray-500 mt-1" />
+                    <Info className="w-8 h-8 text-gray-500 mt-1 shrink-0" />
                   )}
                   <div>
                     <h3 className="text-lg font-bold text-gray-100">
-                      {detailSummary.suggestion === "LONG_BITMEX_SHORT_HL" ? "LONG BitMEX / SHORT Hyperliquid" : 
-                       detailSummary.suggestion === "LONG_HL_SHORT_BITMEX" ? "LONG Hyperliquid / SHORT BitMEX" : 
+                      {detailSummary.suggestion === "LONG_BITMEX_SHORT_HL" ? "LONG BitMEX / SHORT Hyperliquid" :
+                       detailSummary.suggestion === "LONG_HL_SHORT_BITMEX" ? "LONG Hyperliquid / SHORT BitMEX" :
                        "Wait for better entry"}
                     </h3>
                     <div className="mt-2 space-y-1 text-sm text-gray-300">
-                      <p>Expected 14d Yield: <span className="font-mono font-bold text-gray-100">{formatPercent(detailSummary.cumulativeYield)}</span></p>
+                      <p>Expected Annualized Yield: <span className="font-mono font-bold text-gray-100">{formatPercent(annualizedYield)}</span></p>
+                      <p>14-Day Cumulative Yield: <span className="font-mono font-bold text-gray-100">{formatPercent(detailSummary.cumulativeYield)}</span></p>
                       <p>Consistency Score: <span className="font-mono font-bold text-gray-100">{detailSummary.consistencyScore.toFixed(1)}%</span></p>
-                      
                       {detailSummary.suggestion === "LONG_BITMEX_SHORT_HL" && (
                         <p className="text-green-400 mt-2">
                           BitMEX has been the lower-cost venue {detailSummary.consistencyScore.toFixed(1)}% of the time over the last 14 days.
@@ -401,7 +414,7 @@ function DetailView({ pairId, onClose, summary }: { pairId: string, onClose: () 
             </div>
           ) : timeSeries.length > 0 ? (
             <div className="space-y-6">
-              
+
               {/* 1. Funding Rate Comparison */}
               <Card className="bg-[#1a1f2e] border-gray-800">
                 <CardHeader className="pb-2 px-4 pt-4">
@@ -411,18 +424,18 @@ function DetailView({ pairId, onClose, summary }: { pairId: string, onClose: () 
                   <ResponsiveContainer width="100%" height={300} debounce={0}>
                     <LineChart data={timeSeries}>
                       <CartesianGrid strokeDasharray="3 3" stroke={gridColor} vertical={false} />
-                      <XAxis 
-                        dataKey="timestamp" 
-                        tickFormatter={(d) => formatDate(d, "MMM d")} 
-                        tick={{ fontSize: 12, fill: tickColor }} 
-                        stroke={tickColor} 
+                      <XAxis
+                        dataKey="timestamp"
+                        tickFormatter={(d) => formatDate(d, "MMM d")}
+                        tick={{ fontSize: 12, fill: tickColor }}
+                        stroke={tickColor}
                         minTickGap={50}
                       />
-                      <YAxis 
-                        tickFormatter={(v) => formatPercent(v)} 
-                        tick={{ fontSize: 12, fill: tickColor }} 
-                        stroke={tickColor} 
-                        width={60}
+                      <YAxis
+                        tickFormatter={(v) => formatPercent(v)}
+                        tick={{ fontSize: 12, fill: tickColor }}
+                        stroke={tickColor}
+                        width={70}
                       />
                       <Tooltip content={<CustomTooltip />} isAnimationActive={false} cursor={{ stroke: tickColor, strokeDasharray: '3 3' }} />
                       <Legend wrapperStyle={{ fontSize: '13px', paddingTop: '10px' }} />
@@ -433,47 +446,63 @@ function DetailView({ pairId, onClose, summary }: { pairId: string, onClose: () 
                 </CardContent>
               </Card>
 
-              {/* 2. Funding Spread */}
+              {/* 2. Funding Spread — green when BitMEX cheaper (spread < 0), red when BitMEX pricier (spread > 0) */}
               <Card className="bg-[#1a1f2e] border-gray-800">
                 <CardHeader className="pb-2 px-4 pt-4">
-                  <CardTitle className="text-base font-medium text-gray-200">Funding Spread (BitMEX - HL)</CardTitle>
+                  <CardTitle className="text-base font-medium text-gray-200">
+                    Funding Spread (BitMEX − HL) <span className="text-xs font-normal text-gray-500 ml-2">Green = BitMEX cheaper · Red = BitMEX pricier</span>
+                  </CardTitle>
                 </CardHeader>
                 <CardContent className="px-2">
                   <ResponsiveContainer width="100%" height={300} debounce={0}>
                     <ComposedChart data={timeSeries}>
                       <defs>
-                        <linearGradient id="colorSpreadGreen" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor={CHART_COLORS.spreadGreen} stopOpacity={0.8}/>
-                          <stop offset="95%" stopColor={CHART_COLORS.spreadGreen} stopOpacity={0.1}/>
+                        <linearGradient id="gradGreen" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor={CHART_COLORS.spreadGreen} stopOpacity={0.7}/>
+                          <stop offset="95%" stopColor={CHART_COLORS.spreadGreen} stopOpacity={0.05}/>
                         </linearGradient>
-                        <linearGradient id="colorSpreadRed" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor={CHART_COLORS.spreadRed} stopOpacity={0.8}/>
-                          <stop offset="95%" stopColor={CHART_COLORS.spreadRed} stopOpacity={0.1}/>
+                        <linearGradient id="gradRed" x1="0" y1="1" x2="0" y2="0">
+                          <stop offset="5%" stopColor={CHART_COLORS.spreadRed} stopOpacity={0.7}/>
+                          <stop offset="95%" stopColor={CHART_COLORS.spreadRed} stopOpacity={0.05}/>
                         </linearGradient>
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" stroke={gridColor} vertical={false} />
-                      <XAxis 
-                        dataKey="timestamp" 
-                        tickFormatter={(d) => formatDate(d, "MMM d")} 
-                        tick={{ fontSize: 12, fill: tickColor }} 
-                        stroke={tickColor} 
+                      <XAxis
+                        dataKey="timestamp"
+                        tickFormatter={(d) => formatDate(d, "MMM d")}
+                        tick={{ fontSize: 12, fill: tickColor }}
+                        stroke={tickColor}
                         minTickGap={50}
                       />
-                      <YAxis 
-                        tickFormatter={(v) => formatPercent(v)} 
-                        tick={{ fontSize: 12, fill: tickColor }} 
+                      <YAxis
+                        tickFormatter={(v) => formatPercent(v)}
+                        tick={{ fontSize: 12, fill: tickColor }}
                         stroke={tickColor}
-                        width={60}
+                        width={70}
                       />
                       <Tooltip content={<CustomTooltip />} isAnimationActive={false} cursor={{ stroke: tickColor, strokeDasharray: '3 3' }} />
+                      <Legend wrapperStyle={{ fontSize: '13px', paddingTop: '10px' }} />
                       <ReferenceLine y={0} stroke="#4b5563" strokeDasharray="3 3" />
-                      <Area 
-                        type="step" 
-                        dataKey="fundingSpread" 
-                        name="Spread (BitMEX - HL)" 
-                        stroke={CHART_COLORS.spreadGreen} 
-                        fill="url(#colorSpreadGreen)" 
+                      <Area
+                        type="step"
+                        dataKey="spreadNeg"
+                        name="BitMEX Cheaper"
+                        stroke={CHART_COLORS.spreadGreen}
+                        fill="url(#gradGreen)"
                         isAnimationActive={false}
+                        connectNulls={false}
+                        dot={false}
+                        activeDot={{ r: 4 }}
+                      />
+                      <Area
+                        type="step"
+                        dataKey="spreadPos"
+                        name="BitMEX Pricier"
+                        stroke={CHART_COLORS.spreadRed}
+                        fill="url(#gradRed)"
+                        isAnimationActive={false}
+                        connectNulls={false}
+                        dot={false}
                         activeDot={{ r: 4 }}
                       />
                     </ComposedChart>
@@ -490,20 +519,21 @@ function DetailView({ pairId, onClose, summary }: { pairId: string, onClose: () 
                   <ResponsiveContainer width="100%" height={300} debounce={0}>
                     <LineChart data={timeSeries}>
                       <CartesianGrid strokeDasharray="3 3" stroke={gridColor} vertical={false} />
-                      <XAxis 
-                        dataKey="timestamp" 
-                        tickFormatter={(d) => formatDate(d, "MMM d")} 
-                        tick={{ fontSize: 12, fill: tickColor }} 
-                        stroke={tickColor} 
+                      <XAxis
+                        dataKey="timestamp"
+                        tickFormatter={(d) => formatDate(d, "MMM d")}
+                        tick={{ fontSize: 12, fill: tickColor }}
+                        stroke={tickColor}
                         minTickGap={50}
                       />
-                      <YAxis 
-                        tickFormatter={(v) => formatPercent(v)} 
-                        tick={{ fontSize: 12, fill: tickColor }} 
-                        stroke={tickColor} 
-                        width={60}
+                      <YAxis
+                        tickFormatter={(v) => formatPercent(v)}
+                        tick={{ fontSize: 12, fill: tickColor }}
+                        stroke={tickColor}
+                        width={70}
                       />
                       <Tooltip content={<CustomTooltip />} isAnimationActive={false} cursor={{ stroke: tickColor, strokeDasharray: '3 3' }} />
+                      <Legend wrapperStyle={{ fontSize: '13px', paddingTop: '10px' }} />
                       <ReferenceLine y={0} stroke="#4b5563" strokeDasharray="3 3" />
                       <Line type="monotone" dataKey="priceSpreadPct" name="Price Basis %" stroke={CHART_COLORS.purple} strokeWidth={2} dot={false} isAnimationActive={false} />
                     </LineChart>
