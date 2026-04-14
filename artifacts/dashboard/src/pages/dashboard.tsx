@@ -36,7 +36,19 @@ function formatDate(dateStr: string, fmt = "MMM d, HH:mm"): string {
   return format(new Date(dateStr), fmt);
 }
 
-function CustomTooltip({ active, payload, label }: any) {
+interface TooltipEntry {
+  name?: string;
+  value?: number | string | null;
+  color?: string;
+}
+
+interface CustomTooltipProps {
+  active?: boolean;
+  payload?: TooltipEntry[];
+  label?: string;
+}
+
+function CustomTooltip({ active, payload, label }: CustomTooltipProps) {
   if (!active || !payload || payload.length === 0) return null;
   return (
     <div
@@ -52,7 +64,7 @@ function CustomTooltip({ active, payload, label }: any) {
       <div style={{ marginBottom: "6px", fontWeight: 500 }}>
         {label}
       </div>
-      {payload.map((entry: any, index: number) => {
+      {payload.map((entry, index) => {
         if (entry.value === null || entry.value === undefined) return null;
         return (
           <div key={index} style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "3px" }}>
