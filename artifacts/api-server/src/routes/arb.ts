@@ -9,7 +9,7 @@ const BITMEX_INTERVALS_PER_DAY = 3;
 const PAIRS: Record<string, { name: string; bitmex: string; hl: string }> = {
   "1": { name: "WTI Crude Oil", bitmex: "WTIUSDT", hl: "xyz:CL" },
   "2": { name: "Brent Crude Oil", bitmex: "BRENTUSDT", hl: "xyz:BRENTOIL" },
-  "3": { name: "CRCL (Crypto)", bitmex: "CRCLUSDT", hl: "CRCL" },
+  "3": { name: "CRCL (Circle)", bitmex: "CRCLUSDT", hl: "CRCL" },
   "4": { name: "Silver", bitmex: "XAGUSDT", hl: "xyz:SILVER" },
   "5": { name: "Gold", bitmex: "XAUTUSDT", hl: "xyz:GOLD" },
   "6": { name: "S&P 500 (SPY)", bitmex: "SPYUSDT", hl: "xyz:SPY" },
