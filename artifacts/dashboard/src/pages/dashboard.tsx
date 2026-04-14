@@ -373,6 +373,30 @@ function DetailView({ pairId, onClose, summary }: { pairId: string, onClose: () 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
 
+          {/* Current APR Side-by-Side */}
+          {detailSummary && (
+            <div className="grid grid-cols-2 gap-4">
+              <Card className="bg-[#1a1f2e] border-gray-800">
+                <CardContent className="p-4">
+                  <p className="text-xs font-medium uppercase tracking-wider" style={{ color: "#FF6D00" }}>BitMEX APR</p>
+                  <p className={`text-2xl font-bold font-mono mt-1 ${detailSummary.bitmexCurrentAPR < 0 ? "text-green-400" : detailSummary.bitmexCurrentAPR > 0 ? "text-red-400" : "text-gray-300"}`}>
+                    {formatPercent(detailSummary.bitmexCurrentAPR)}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">{detailSummary.bitmexSymbol}</p>
+                </CardContent>
+              </Card>
+              <Card className="bg-[#1a1f2e] border-gray-800">
+                <CardContent className="p-4">
+                  <p className="text-xs font-medium uppercase tracking-wider" style={{ color: "#2962FF" }}>Hyperliquid APR</p>
+                  <p className={`text-2xl font-bold font-mono mt-1 ${detailSummary.hlCurrentAPR < 0 ? "text-green-400" : detailSummary.hlCurrentAPR > 0 ? "text-red-400" : "text-gray-300"}`}>
+                    {formatPercent(detailSummary.hlCurrentAPR)}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">{detailSummary.hlSymbol}</p>
+                </CardContent>
+              </Card>
+            </div>
+          )}
+
           {/* Suggestion Card */}
           {detailSummary && (
             <Card className={`border ${detailSummary.suggestion === "LONG_BITMEX_SHORT_HL" ? "border-green-500/30 bg-green-500/5" : detailSummary.suggestion === "LONG_HL_SHORT_BITMEX" ? "border-yellow-500/30 bg-yellow-500/5" : "border-gray-800 bg-[#1a1f2e]"}`}>

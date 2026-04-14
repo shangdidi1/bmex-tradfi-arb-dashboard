@@ -56,60 +56,6 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function fetchBitmexInstrument(symbol: string): Promise<{ fundingRate: number; lastPrice: number } | null> {
-  try {
-    const url = `https://www.bitmex.com/api/v1/instrument?symbol=${encodeURIComponent(symbol)}&count=1`;
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const data = (await res.json()) as Array<{ fundingRate?: number; lastPrice?: number }>;
-    if (!data.length) return null;
-    return {
-      fundingRate: data[0].fundingRate ?? 0,
-      lastPrice: data[0].lastPrice ?? 0,
-    };
-  } catch {
-    return null;
-  }
-}
-
-async function fetchHyperliquidCurrentRate(coin: string): Promise<number> {
-  const endTimeMs = Date.now();
-  const startTimeMs = endTimeMs - 4 * 60 * 60 * 1000; // Last 4 hours
-  try {
-    const res = await fetch("https://api.hyperliquid.xyz/info", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "fundingHistory", coin, startTime: startTimeMs, endTime: endTimeMs }),
-    });
-    if (!res.ok) return 0;
-    const data = await res.json() as Array<{ time: number; fundingRate: string }>;
-    if (!Array.isArray(data) || !data.length) return 0;
-    const sorted = [...data].sort((a, b) => b.time - a.time);
-    return parseFloat(sorted[0].fundingRate) * 24 * 365 * 100;
-  } catch {
-    return 0;
-  }
-}
-
-async function fetchHyperliquidCurrentPrice(coin: string): Promise<number> {
-  const endTimeMs = Date.now();
-  const startTimeMs = endTimeMs - 60 * 60 * 1000; // Last 1 hour of 5m candles
-  try {
-    const res = await fetch("https://api.hyperliquid.xyz/info", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "candleSnapshot", req: { coin, interval: "5m", startTime: startTimeMs, endTime: endTimeMs } }),
-    });
-    if (!res.ok) return 0;
-    const data = await res.json() as Array<{ t: number; c: string }>;
-    if (!Array.isArray(data) || !data.length) return 0;
-    const sorted = [...data].sort((a, b) => b.t - a.t);
-    return parseFloat(sorted[0].c);
-  } catch {
-    return 0;
-  }
-}
-
 async function fetchBitmexFundingHistory(symbol: string): Promise<Array<{ ts: number; apr: number }>> {
   const result: Array<{ ts: number; apr: number }> = [];
   const endTime = Date.now();
