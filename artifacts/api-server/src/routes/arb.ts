@@ -3,17 +3,17 @@ import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
 
-const DAYS_LOOKBACK = 14;
+const DAYS_LOOKBACK = 30;
 const BITMEX_INTERVALS_PER_DAY = 3;
 
 const PAIRS: Record<string, { name: string; bitmex: string; hl: string }> = {
   "1": { name: "WTI Crude Oil", bitmex: "WTIUSDT", hl: "xyz:CL" },
   "2": { name: "Brent Crude Oil", bitmex: "BRENTUSDT", hl: "xyz:BRENTOIL" },
-  "3": { name: "CRCL (Circle)", bitmex: "CRCLUSDT", hl: "CRCL" },
+  "3": { name: "CRCL (Circle)", bitmex: "CRCLUSDT", hl: "xyz:CRCL" },
   "4": { name: "Silver", bitmex: "XAGUSDT", hl: "xyz:SILVER" },
   "5": { name: "Gold", bitmex: "XAUTUSDT", hl: "xyz:GOLD" },
-  "6": { name: "S&P 500 (SPY)", bitmex: "SPYUSDT", hl: "xyz:SPY" },
-  "7": { name: "Nasdaq 100 (QQQ)", bitmex: "QQQUSDT", hl: "xyz:QQQ" },
+  "6": { name: "S&P 500 (SPY)", bitmex: "SPYUSDT", hl: "xyz:SP500" },
+  "7": { name: "Nasdaq 100 (QQQ)", bitmex: "QQQUSDT", hl: "xyz:QQQ100" },
   "8": { name: "Coinbase (COIN)", bitmex: "COINUSDT", hl: "xyz:COIN" },
   "9": { name: "Robinhood (HOOD)", bitmex: "HOODUSDT", hl: "xyz:HOOD" },
 };
@@ -28,6 +28,12 @@ interface TimeSeriesPoint {
   priceSpreadPct: number;
 }
 
+interface WindowMetrics {
+  consistencyScore: number;
+  cumulativeYield: number;
+  annualizedYield: number;
+}
+
 interface PairSummary {
   pairId: string;
   name: string;
@@ -37,8 +43,16 @@ interface PairSummary {
   hlCurrentAPR: number;
   fundingSpread: number;
   priceSpreadPct: number;
+  // 14-day (legacy, kept for detail view)
   consistencyScore: number;
   cumulativeYield: number;
+  // Multi-window metrics
+  consistency7d: number;
+  consistency14d: number;
+  consistency30d: number;
+  annYield7d: number;
+  annYield14d: number;
+  annYield30d: number;
   suggestion: "LONG_BITMEX_SHORT_HL" | "LONG_HL_SHORT_BITMEX" | "NEUTRAL";
   lastUpdated: string;
 }
@@ -200,20 +214,32 @@ function buildTimeSeries(
   bmexPrice: Array<{ ts: number; price: number }>,
   hlPrice: Array<{ ts: number; price: number }>,
 ): TimeSeriesPoint[] {
-  // Create maps
   const bmexFundingMap = new Map(dedup(bmexFunding).map((x) => [x.ts, x.apr]));
   const hlFundingMap = new Map(dedup(hlFunding).map((x) => [x.ts, x.apr]));
   const bmexPriceMap = new Map(dedup(bmexPrice).map((x) => [x.ts, x.price]));
   const hlPriceMap = new Map(dedup(hlPrice).map((x) => [x.ts, x.price]));
 
-  // Build unified time index from price data (most granular)
+  // When HL price data is unavailable (e.g. TradFi xyz: perps), fall back to using
+  // funding-rate timestamps so consistency & yield can still be computed from funding data.
+  const hasHlPrice = hlPrice.length > 0;
+  const hasBmexPrice = bmexPrice.length > 0;
+
   const allTs = new Set<number>();
-  bmexPrice.forEach((x) => allTs.add(x.ts));
-  hlPrice.forEach((x) => allTs.add(x.ts));
+  if (hasHlPrice && hasBmexPrice) {
+    // Prefer price timestamps (most granular) when available on both sides
+    bmexPrice.forEach((x) => allTs.add(x.ts));
+    hlPrice.forEach((x) => allTs.add(x.ts));
+  } else if (hasBmexPrice) {
+    // BitMEX price only — use BitMEX 5m candle timestamps, HL price set to 0
+    bmexPrice.forEach((x) => allTs.add(x.ts));
+  } else {
+    // No price data at all — fall back to funding timestamps
+    bmexFunding.forEach((x) => allTs.add(x.ts));
+    hlFunding.forEach((x) => allTs.add(x.ts));
+  }
 
   const sortedTs = Array.from(allTs).sort((a, b) => a - b);
 
-  // Forward-fill funding rates (they change every 8h)
   const points: TimeSeriesPoint[] = [];
   let lastBmexFunding = 0;
   let lastHlFunding = 0;
@@ -224,10 +250,13 @@ function buildTimeSeries(
 
     const bmexPx = bmexPriceMap.get(ts) ?? 0;
     const hlPx = hlPriceMap.get(ts) ?? 0;
-    if (!bmexPx || !hlPx) continue;
+
+    // Require at least one price OR that we're in funding-only mode
+    if (hasHlPrice && hasBmexPrice && (!bmexPx || !hlPx)) continue;
+    if (hasBmexPrice && !hasHlPrice && !bmexPx) continue;
 
     const spread = lastBmexFunding - lastHlFunding;
-    const priceSpread = hlPx !== 0 ? ((bmexPx - hlPx) / hlPx) * 100 : 0;
+    const priceSpread = (bmexPx && hlPx) ? ((bmexPx - hlPx) / hlPx) * 100 : 0;
 
     points.push({
       timestamp: new Date(ts).toISOString(),
@@ -240,11 +269,29 @@ function buildTimeSeries(
     });
   }
 
-  // Limit to ~4000 points to keep payload manageable (downsample)
   const maxPoints = 4000;
   if (points.length <= maxPoints) return points;
   const step = Math.ceil(points.length / maxPoints);
   return points.filter((_, i) => i % step === 0);
+}
+
+function computeWindowMetrics(timeSeries: TimeSeriesPoint[], windowDays: number): WindowMetrics {
+  const cutoff = Date.now() - windowDays * 24 * 60 * 60 * 1000;
+  const pts = timeSeries.filter((p) => new Date(p.timestamp).getTime() >= cutoff);
+  const total = pts.length;
+
+  const bmexLower = pts.filter((p) => p.fundingSpread < 0).length;
+  const consistencyScore = total > 0 ? parseFloat(((bmexLower / total) * 100).toFixed(1)) : 50;
+
+  // Arb yield: always positive — we always take the favorable direction
+  const cumYield = pts.reduce((sum, p) => sum + Math.abs(p.fundingSpread) / (365 * 24 * 12), 0);
+  const annualizedYield = total > 0 ? parseFloat((cumYield * (365 / windowDays)).toFixed(4)) : 0;
+
+  return {
+    consistencyScore,
+    cumulativeYield: parseFloat(cumYield.toFixed(4)),
+    annualizedYield,
+  };
 }
 
 function computeSummary(
@@ -258,27 +305,21 @@ function computeSummary(
 ): PairSummary {
   const spread = currentBmexAPR - currentHlAPR;
 
-  // Consistency score: % of 5-min periods where BitMEX APR < HL APR (BitMEX is cheaper to hold long)
-  const totalPeriods = timeSeries.length;
-  const bmexLowerPeriods = timeSeries.filter((p) => p.fundingSpread < 0).length;
-  const consistencyScore = totalPeriods > 0 ? parseFloat(((bmexLowerPeriods / totalPeriods) * 100).toFixed(1)) : 50;
+  const w7 = computeWindowMetrics(timeSeries, 7);
+  const w14 = computeWindowMetrics(timeSeries, 14);
+  const w30 = computeWindowMetrics(timeSeries, 30);
 
-  // Cumulative yield: sum of per-period spread returns
-  // Per period return = (spread_apr) / (365 * 24 * 12) for 5-minute periods
-  const cumulativeYield = timeSeries.reduce((sum, p) => sum + p.fundingSpread / (365 * 24 * 12), 0);
-
-  // Determine the dominant direction from history
-  // If mean spread < 0 (BitMEX cheaper), suggest Long BitMEX / Short HL
-  const meanSpread = totalPeriods > 0
-    ? timeSeries.reduce((sum, p) => sum + p.fundingSpread, 0) / totalPeriods
+  // Determine suggestion from 14d mean spread direction
+  const pts14 = timeSeries.filter((p) => new Date(p.timestamp).getTime() >= Date.now() - 14 * 24 * 60 * 60 * 1000);
+  const meanSpread14 = pts14.length > 0
+    ? pts14.reduce((sum, p) => sum + p.fundingSpread, 0) / pts14.length
     : spread;
 
   let suggestion: PairSummary["suggestion"] = "NEUTRAL";
-  if (Math.abs(meanSpread) > 0.1) {
-    suggestion = meanSpread < 0 ? "LONG_BITMEX_SHORT_HL" : "LONG_HL_SHORT_BITMEX";
+  if (Math.abs(meanSpread14) > 0.1) {
+    suggestion = meanSpread14 < 0 ? "LONG_BITMEX_SHORT_HL" : "LONG_HL_SHORT_BITMEX";
   }
 
-  // Latest price spread
   const latestPoint = timeSeries.length > 0 ? timeSeries[timeSeries.length - 1] : null;
   const priceSpreadPct = latestPoint?.priceSpreadPct ?? 0;
 
@@ -291,8 +332,16 @@ function computeSummary(
     hlCurrentAPR: parseFloat(currentHlAPR.toFixed(4)),
     fundingSpread: parseFloat(spread.toFixed(4)),
     priceSpreadPct: parseFloat(priceSpreadPct.toFixed(4)),
-    consistencyScore,
-    cumulativeYield: parseFloat(cumulativeYield.toFixed(4)),
+    // 14-day legacy fields (kept for detail view)
+    consistencyScore: w14.consistencyScore,
+    cumulativeYield: w14.cumulativeYield,
+    // Windowed metrics
+    consistency7d: w7.consistencyScore,
+    consistency14d: w14.consistencyScore,
+    consistency30d: w30.consistencyScore,
+    annYield7d: w7.annualizedYield,
+    annYield14d: w14.annualizedYield,
+    annYield30d: w30.annualizedYield,
     suggestion,
     lastUpdated: new Date().toISOString(),
   };
@@ -318,7 +367,6 @@ async function buildPairDetail(pairId: string): Promise<{ summary: PairSummary; 
 
   const timeSeries = buildTimeSeries(bmexFunding, hlFunding, bmexPrice, hlPrice);
 
-  // Get current rates from last known funding entries
   const currentBmexAPR = bmexFunding.length > 0 ? bmexFunding[bmexFunding.length - 1].apr : 0;
   const currentHlAPR = hlFunding.length > 0 ? hlFunding[hlFunding.length - 1].apr : 0;
 
@@ -327,8 +375,6 @@ async function buildPairDetail(pairId: string): Promise<{ summary: PairSummary; 
 }
 
 // GET /api/arb/summary
-// Fetches full 14-day history for all stale pairs (batched 3 at a time) so that
-// consistency scores and cumulative yield are always history-derived, not defaults.
 router.get("/arb/summary", async (req, res): Promise<void> => {
   try {
     const now = Date.now();
@@ -347,7 +393,6 @@ router.get("/arb/summary", async (req, res): Promise<void> => {
       }
     }
 
-    // Fetch full 14-day detail for stale pairs (up to 3 in parallel to respect rate limits)
     if (stalePairIds.length > 0) {
       const BATCH_SIZE = 3;
       for (let i = 0; i < stalePairIds.length; i += BATCH_SIZE) {
@@ -369,7 +414,6 @@ router.get("/arb/summary", async (req, res): Promise<void> => {
       }
     }
 
-    // Sort by pairId
     cachedPairs.sort((a, b) => parseInt(a.pairId) - parseInt(b.pairId));
     const cachedAt = cacheTimestamps.length > 0 ? new Date(Math.min(...cacheTimestamps)).toISOString() : new Date().toISOString();
 
@@ -400,8 +444,6 @@ router.get("/arb/:pairId", async (req, res): Promise<void> => {
 
     const detail = await buildPairDetail(pairId);
     detailCache.set(pairId, { data: detail, cachedAt: now });
-
-    // Also update the summary cache with accurate stats from history
     summaryCache.set(pairId, { data: detail.summary, cachedAt: now });
 
     res.json(detail);

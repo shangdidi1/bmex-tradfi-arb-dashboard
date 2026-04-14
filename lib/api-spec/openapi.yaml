@@ -110,10 +110,28 @@ components:
           description: Price basis (BitMEX price vs HL price, %)
         consistencyScore:
           type: number
-          description: Percentage of 5-min periods where BitMEX funding was lower than HL (0-100)
+          description: 14-day percentage of 5-min periods where BitMEX funding was lower than HL (0-100)
         cumulativeYield:
           type: number
-          description: Theoretical cumulative funding yield over the lookback period (%)
+          description: 14-day cumulative arb yield (always positive, %)
+        consistency7d:
+          type: number
+          description: 7-day consistency score (% of periods BitMEX was cheaper, 0-100)
+        consistency14d:
+          type: number
+          description: 14-day consistency score (% of periods BitMEX was cheaper, 0-100)
+        consistency30d:
+          type: number
+          description: 30-day consistency score (% of periods BitMEX was cheaper, 0-100)
+        annYield7d:
+          type: number
+          description: 7-day annualized arb yield (always positive, %)
+        annYield14d:
+          type: number
+          description: 14-day annualized arb yield (always positive, %)
+        annYield30d:
+          type: number
+          description: 30-day annualized arb yield (always positive, %)
         suggestion:
           type: string
           enum: [LONG_BITMEX_SHORT_HL, LONG_HL_SHORT_BITMEX, NEUTRAL]
@@ -132,6 +150,12 @@ components:
         - priceSpreadPct
         - consistencyScore
         - cumulativeYield
+        - consistency7d
+        - consistency14d
+        - consistency30d
+        - annYield7d
+        - annYield14d
+        - annYield30d
         - suggestion
         - lastUpdated
 

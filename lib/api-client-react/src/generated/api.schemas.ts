@@ -38,10 +38,22 @@ export interface ArbPairSummary {
   fundingSpread: number;
   /** Price basis (BitMEX price vs HL price, %) */
   priceSpreadPct: number;
-  /** Percentage of 5-min periods where BitMEX funding was lower than HL (0-100) */
+  /** 14-day percentage of 5-min periods where BitMEX funding was lower than HL (0-100) */
   consistencyScore: number;
-  /** Theoretical cumulative funding yield over the lookback period (%) */
+  /** 14-day cumulative arb yield (always positive, %) */
   cumulativeYield: number;
+  /** 7-day consistency score (% of periods BitMEX was cheaper, 0-100) */
+  consistency7d: number;
+  /** 14-day consistency score (% of periods BitMEX was cheaper, 0-100) */
+  consistency14d: number;
+  /** 30-day consistency score (% of periods BitMEX was cheaper, 0-100) */
+  consistency30d: number;
+  /** 7-day annualized arb yield (always positive, %) */
+  annYield7d: number;
+  /** 14-day annualized arb yield (always positive, %) */
+  annYield14d: number;
+  /** 30-day annualized arb yield (always positive, %) */
+  annYield30d: number;
   /** Trade direction suggestion */
   suggestion: ArbPairSummarySuggestion;
   /** ISO timestamp of last data refresh */

@@ -91,7 +91,7 @@ export default function Dashboard() {
   const [selectedPairId, setSelectedPairId] = useState<string | null>(null);
 
   const [sorting, setSorting] = useState<SortingState>([
-    { id: "consistencyScore", desc: true }
+    { id: "annYield14d", desc: true }
   ]);
 
   const columns = useMemo<ColumnDef<ArbPairSummary>[]>(() => [
@@ -116,30 +116,54 @@ export default function Dashboard() {
       cell: ({ row }) => <span className="font-mono text-blue-400">{formatPercent(row.original.hlCurrentAPR)}</span>
     },
     {
-      accessorKey: "fundingSpread",
-      header: "Funding Spread",
-      cell: ({ row }) => {
-        const val = row.original.fundingSpread;
-        const colorClass = val < 0 ? "text-green-500" : (val > 0 ? "text-red-500" : "text-gray-400");
-        return <span className={`font-mono ${colorClass}`}>{formatPercent(val)}</span>;
-      }
-    },
-    {
       accessorKey: "priceSpreadPct",
       header: "Price Basis %",
       cell: ({ row }) => <span className="font-mono">{formatPercent(row.original.priceSpreadPct)}</span>
     },
     {
-      accessorKey: "consistencyScore",
-      header: "Consistency",
-      cell: ({ row }) => <span className="font-mono">{row.original.consistencyScore.toFixed(1)}%</span>
-    },
-    {
-      accessorKey: "cumulativeYield",
+      accessorKey: "annYield14d",
       header: "Ann. Yield",
       cell: ({ row }) => {
-        const annualizedYield = row.original.cumulativeYield * (365 / 14);
-        return <span className="font-mono">{formatPercent(annualizedYield)}</span>;
+        const r = row.original;
+        return (
+          <div className="space-y-0.5 font-mono text-sm">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] text-gray-500 w-6">7d</span>
+              <span className="text-green-400">{formatPercent(r.annYield7d ?? 0)}</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] text-gray-400 w-6">14d</span>
+              <span className="text-green-300 font-semibold">{formatPercent(r.annYield14d ?? 0)}</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] text-gray-500 w-6">30d</span>
+              <span className="text-green-400">{formatPercent(r.annYield30d ?? 0)}</span>
+            </div>
+          </div>
+        );
+      }
+    },
+    {
+      accessorKey: "consistency14d",
+      header: "Consistency",
+      cell: ({ row }) => {
+        const r = row.original;
+        return (
+          <div className="space-y-0.5 font-mono text-sm">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] text-gray-500 w-6">7d</span>
+              <span>{(r.consistency7d ?? 0).toFixed(1)}%</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] text-gray-400 w-6">14d</span>
+              <span className="font-semibold text-gray-100">{(r.consistency14d ?? r.consistencyScore ?? 0).toFixed(1)}%</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] text-gray-500 w-6">30d</span>
+              <span>{(r.consistency30d ?? 0).toFixed(1)}%</span>
+            </div>
+          </div>
+        );
       }
     },
     {
@@ -274,7 +298,7 @@ export default function Dashboard() {
                 {loading && !summaryData.length ? (
                   [...Array(9)].map((_, i) => (
                     <TableRow key={i} className="border-gray-800">
-                      {[...Array(8)].map((_, j) => (
+                      {[...Array(7)].map((_, j) => (
                         <TableCell key={j}><Skeleton className="h-5 w-full bg-gray-800" /></TableCell>
                       ))}
                     </TableRow>
@@ -296,7 +320,7 @@ export default function Dashboard() {
                 )}
                 {!loading && summaryData.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={8} className="h-24 text-center text-gray-500">
+                    <TableCell colSpan={7} className="h-24 text-center text-gray-500">
                       No arbitrage data available.
                     </TableCell>
                   </TableRow>
@@ -345,7 +369,7 @@ function DetailView({ pairId, onClose, summary }: { pairId: string, onClose: () 
     }));
   }, [rawSeries]);
 
-  const annualizedYield = detailSummary ? detailSummary.cumulativeYield * (365 / 14) : 0;
+  const annualizedYield = detailSummary ? detailSummary.annYield14d : 0;
 
   const gridColor = "rgba(255,255,255,0.05)";
   const tickColor = "#6b7280";
@@ -415,13 +439,25 @@ function DetailView({ pairId, onClose, summary }: { pairId: string, onClose: () 
                        detailSummary.suggestion === "LONG_HL_SHORT_BITMEX" ? "LONG Hyperliquid / SHORT BitMEX" :
                        "Wait for better entry"}
                     </h3>
-                    <div className="mt-2 space-y-1 text-sm text-gray-300">
-                      <p>Expected Annualized Yield: <span className="font-mono font-bold text-gray-100">{formatPercent(annualizedYield)}</span></p>
-                      <p>14-Day Cumulative Yield: <span className="font-mono font-bold text-gray-100">{formatPercent(detailSummary.cumulativeYield)}</span></p>
-                      <p>Consistency Score: <span className="font-mono font-bold text-gray-100">{detailSummary.consistencyScore.toFixed(1)}%</span></p>
+                    <div className="mt-3 space-y-2 text-sm text-gray-300">
+                      <div className="grid grid-cols-3 gap-3">
+                        {[
+                          { label: "7-Day", yield: detailSummary.annYield7d, cons: detailSummary.consistency7d },
+                          { label: "14-Day", yield: detailSummary.annYield14d, cons: detailSummary.consistency14d },
+                          { label: "30-Day", yield: detailSummary.annYield30d, cons: detailSummary.consistency30d },
+                        ].map(({ label, yield: y, cons }) => (
+                          <div key={label} className="bg-black/20 rounded-lg p-3">
+                            <p className="text-xs text-gray-500 mb-1">{label}</p>
+                            <p className="font-mono font-bold text-green-400">{formatPercent(y)}</p>
+                            <p className="text-xs text-gray-400 mt-1">Ann. Yield</p>
+                            <p className="font-mono font-semibold text-gray-200 mt-1">{cons.toFixed(1)}%</p>
+                            <p className="text-xs text-gray-500">Consistency</p>
+                          </div>
+                        ))}
+                      </div>
                       {detailSummary.suggestion === "LONG_BITMEX_SHORT_HL" && (
-                        <p className="text-green-400 mt-2">
-                          BitMEX has been the lower-cost venue {detailSummary.consistencyScore.toFixed(1)}% of the time over the last 14 days.
+                        <p className="text-green-400 mt-2 text-xs">
+                          BitMEX has been the lower-cost venue {detailSummary.consistency14d.toFixed(1)}% of the time over the last 14 days.
                         </p>
                       )}
                     </div>
@@ -432,11 +468,11 @@ function DetailView({ pairId, onClose, summary }: { pairId: string, onClose: () 
           )}
 
           {/* Promote BitMEX Banner */}
-          {detailSummary && detailSummary.consistencyScore > 60 && detailSummary.suggestion === "LONG_BITMEX_SHORT_HL" && (
+          {detailSummary && detailSummary.consistency14d > 60 && detailSummary.suggestion === "LONG_BITMEX_SHORT_HL" && (
             <div className="bg-[#FF6D00]/10 border border-[#FF6D00]/30 rounded-lg p-4 flex items-start gap-3">
               <AlertTriangle className="w-5 h-5 text-[#FF6D00] shrink-0 mt-0.5" />
               <p className="text-sm text-[#FF6D00]">
-                <strong className="font-semibold">BitMEX Advantage:</strong> BitMEX has been the consistent low-cost venue for {detailSummary.consistencyScore.toFixed(1)}% of the last 14 days — use BitMEX as your long leg to capture this spread.
+                <strong className="font-semibold">BitMEX Advantage:</strong> BitMEX has been the consistent low-cost venue for {detailSummary.consistency14d.toFixed(1)}% of the last 14 days — use BitMEX as your long leg to capture this spread.
               </p>
             </div>
           )}

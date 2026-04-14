@@ -41,13 +41,35 @@ export const GetArbSummaryResponse = zod.object({
       consistencyScore: zod
         .number()
         .describe(
-          "Percentage of 5-min periods where BitMEX funding was lower than HL (0-100)",
+          "14-day percentage of 5-min periods where BitMEX funding was lower than HL (0-100)",
         ),
       cumulativeYield: zod
         .number()
+        .describe("14-day cumulative arb yield (always positive, %)"),
+      consistency7d: zod
+        .number()
         .describe(
-          "Theoretical cumulative funding yield over the lookback period (%)",
+          "7-day consistency score (% of periods BitMEX was cheaper, 0-100)",
         ),
+      consistency14d: zod
+        .number()
+        .describe(
+          "14-day consistency score (% of periods BitMEX was cheaper, 0-100)",
+        ),
+      consistency30d: zod
+        .number()
+        .describe(
+          "30-day consistency score (% of periods BitMEX was cheaper, 0-100)",
+        ),
+      annYield7d: zod
+        .number()
+        .describe("7-day annualized arb yield (always positive, %)"),
+      annYield14d: zod
+        .number()
+        .describe("14-day annualized arb yield (always positive, %)"),
+      annYield30d: zod
+        .number()
+        .describe("30-day annualized arb yield (always positive, %)"),
       suggestion: zod
         .enum(["LONG_BITMEX_SHORT_HL", "LONG_HL_SHORT_BITMEX", "NEUTRAL"])
         .describe("Trade direction suggestion"),
@@ -87,13 +109,35 @@ export const GetArbDetailResponse = zod.object({
     consistencyScore: zod
       .number()
       .describe(
-        "Percentage of 5-min periods where BitMEX funding was lower than HL (0-100)",
+        "14-day percentage of 5-min periods where BitMEX funding was lower than HL (0-100)",
       ),
     cumulativeYield: zod
       .number()
+      .describe("14-day cumulative arb yield (always positive, %)"),
+    consistency7d: zod
+      .number()
       .describe(
-        "Theoretical cumulative funding yield over the lookback period (%)",
+        "7-day consistency score (% of periods BitMEX was cheaper, 0-100)",
       ),
+    consistency14d: zod
+      .number()
+      .describe(
+        "14-day consistency score (% of periods BitMEX was cheaper, 0-100)",
+      ),
+    consistency30d: zod
+      .number()
+      .describe(
+        "30-day consistency score (% of periods BitMEX was cheaper, 0-100)",
+      ),
+    annYield7d: zod
+      .number()
+      .describe("7-day annualized arb yield (always positive, %)"),
+    annYield14d: zod
+      .number()
+      .describe("14-day annualized arb yield (always positive, %)"),
+    annYield30d: zod
+      .number()
+      .describe("30-day annualized arb yield (always positive, %)"),
     suggestion: zod
       .enum(["LONG_BITMEX_SHORT_HL", "LONG_HL_SHORT_BITMEX", "NEUTRAL"])
       .describe("Trade direction suggestion"),
