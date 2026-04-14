@@ -381,11 +381,12 @@ async function buildPairDetail(pairId: string): Promise<{ summary: PairSummary; 
 }
 
 // GET /api/arb/summary
+// Fetches full 14-day history for all stale pairs (batched 3 at a time) so that
+// consistency scores and cumulative yield are always history-derived, not defaults.
 router.get("/arb/summary", async (req, res): Promise<void> => {
   try {
     const now = Date.now();
 
-    // Check if we have all cached summaries fresh enough
     const cachedPairs: PairSummary[] = [];
     const stalePairIds: string[] = [];
     const cacheTimestamps: number[] = [];
@@ -400,65 +401,25 @@ router.get("/arb/summary", async (req, res): Promise<void> => {
       }
     }
 
+    // Fetch full 14-day detail for stale pairs (up to 3 in parallel to respect rate limits)
     if (stalePairIds.length > 0) {
-      for (const pairId of stalePairIds) {
-        const pair = PAIRS[pairId];
-        if (!pair) continue;
-
-        // Fetch BitMEX instrument and HL current data in parallel
-        const [bmexInstrument, currentHlAPR, hlPrice] = await Promise.all([
-          fetchBitmexInstrument(pair.bitmex),
-          fetchHyperliquidCurrentRate(pair.hl),
-          fetchHyperliquidCurrentPrice(pair.hl),
-        ]);
-        await sleep(200);
-
-        // BitMEX fundingRate is the 8h rate → APR = rate * 3 * 365 * 100
-        const currentBmexAPR = bmexInstrument ? bmexInstrument.fundingRate * BITMEX_INTERVALS_PER_DAY * 365 * 100 : 0;
-
-        const bmexPrice = bmexInstrument?.lastPrice ?? 0;
-        const priceSpreadPct = hlPrice !== 0 ? ((bmexPrice - hlPrice) / hlPrice) * 100 : 0;
-
-        // Check if we have a detail cache to use for consistency/yield
-        const detailCached = detailCache.get(pairId);
-        const timeSeries = detailCached ? detailCached.data.timeSeries : [];
-        const spread = currentBmexAPR - currentHlAPR;
-
-        const totalPeriods = timeSeries.length;
-        const bmexLowerPeriods = timeSeries.filter((p) => p.fundingSpread < 0).length;
-        const consistencyScore = totalPeriods > 0
-          ? parseFloat(((bmexLowerPeriods / totalPeriods) * 100).toFixed(1))
-          : 50;
-        const cumulativeYield = timeSeries.reduce((sum, p) => sum + p.fundingSpread / (365 * 24 * 12), 0);
-        const meanSpread = totalPeriods > 0
-          ? timeSeries.reduce((sum, p) => sum + p.fundingSpread, 0) / totalPeriods
-          : spread;
-
-        let suggestion: PairSummary["suggestion"] = "NEUTRAL";
-        if (Math.abs(meanSpread) > 0.1) {
-          suggestion = meanSpread < 0 ? "LONG_BITMEX_SHORT_HL" : "LONG_HL_SHORT_BITMEX";
-        } else if (Math.abs(spread) > 0.1) {
-          suggestion = spread < 0 ? "LONG_BITMEX_SHORT_HL" : "LONG_HL_SHORT_BITMEX";
+      const BATCH_SIZE = 3;
+      for (let i = 0; i < stalePairIds.length; i += BATCH_SIZE) {
+        const batch = stalePairIds.slice(i, i + BATCH_SIZE);
+        const results = await Promise.allSettled(batch.map((id) => buildPairDetail(id)));
+        for (let j = 0; j < batch.length; j++) {
+          const pairId = batch[j];
+          const result = results[j];
+          if (result.status === "fulfilled") {
+            const detail = result.value;
+            detailCache.set(pairId, { data: detail, cachedAt: now });
+            summaryCache.set(pairId, { data: detail.summary, cachedAt: now });
+            cachedPairs.push(detail.summary);
+            cacheTimestamps.push(now);
+          } else {
+            logger.error({ pairId, reason: result.reason }, "Failed to build detail for pair during summary");
+          }
         }
-
-        const pairSummary: PairSummary = {
-          pairId,
-          name: pair.name,
-          bitmexSymbol: pair.bitmex,
-          hlSymbol: pair.hl,
-          bitmexCurrentAPR: parseFloat(currentBmexAPR.toFixed(4)),
-          hlCurrentAPR: parseFloat(currentHlAPR.toFixed(4)),
-          fundingSpread: parseFloat(spread.toFixed(4)),
-          priceSpreadPct: parseFloat(priceSpreadPct.toFixed(4)),
-          consistencyScore,
-          cumulativeYield: parseFloat(cumulativeYield.toFixed(4)),
-          suggestion,
-          lastUpdated: new Date().toISOString(),
-        };
-
-        summaryCache.set(pairId, { data: pairSummary, cachedAt: now });
-        cachedPairs.push(pairSummary);
-        cacheTimestamps.push(now);
       }
     }
 
