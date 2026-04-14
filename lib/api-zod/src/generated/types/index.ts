@@ -6,4 +6,10 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from "./arbDetailResponse";
+export * from "./arbPairSummary";
+export * from "./arbPairSummarySuggestion";
+export * from "./arbSummaryResponse";
+export * from "./arbTimeSeriesPoint";
+export * from "./errorResponse";
 export * from "./healthStatus";

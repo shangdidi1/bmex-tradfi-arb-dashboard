@@ -10,6 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: arb
+    description: Arbitrage analysis operations
 paths:
   /healthz:
     get:
@@ -24,6 +26,47 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /arb/summary:
+    get:
+      operationId: getArbSummary
+      tags: [arb]
+      summary: Get arbitrage summary for all asset pairs
+      description: Returns current funding rate and price spread metrics for all 9 BitMEX vs Hyperliquid asset pairs
+      responses:
+        "200":
+          description: Summary of all pairs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArbSummaryResponse"
+
+  /arb/{pairId}:
+    get:
+      operationId: getArbDetail
+      tags: [arb]
+      summary: Get detailed 14-day history for an asset pair
+      parameters:
+        - name: pairId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Pair ID (e.g. "1" through "9")
+      responses:
+        "200":
+          description: Detailed time-series data for the pair
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArbDetailResponse"
+        "404":
+          description: Pair not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +77,114 @@ components:
       required:
         - status
 
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+
+    ArbPairSummary:
+      type: object
+      properties:
+        pairId:
+          type: string
+        name:
+          type: string
+        bitmexSymbol:
+          type: string
+        hlSymbol:
+          type: string
+        bitmexCurrentAPR:
+          type: number
+          description: BitMEX latest annualized funding rate (%)
+        hlCurrentAPR:
+          type: number
+          description: Hyperliquid latest annualized funding rate (%)
+        fundingSpread:
+          type: number
+          description: BitMEX APR minus Hyperliquid APR (%)
+        priceSpreadPct:
+          type: number
+          description: Price basis (BitMEX price vs HL price, %)
+        consistencyScore:
+          type: number
+          description: Percentage of 5-min periods where BitMEX funding was lower than HL (0-100)
+        cumulativeYield:
+          type: number
+          description: Theoretical cumulative funding yield over the lookback period (%)
+        suggestion:
+          type: string
+          enum: [LONG_BITMEX_SHORT_HL, LONG_HL_SHORT_BITMEX, NEUTRAL]
+          description: Trade direction suggestion
+        lastUpdated:
+          type: string
+          description: ISO timestamp of last data refresh
+      required:
+        - pairId
+        - name
+        - bitmexSymbol
+        - hlSymbol
+        - bitmexCurrentAPR
+        - hlCurrentAPR
+        - fundingSpread
+        - priceSpreadPct
+        - consistencyScore
+        - cumulativeYield
+        - suggestion
+        - lastUpdated
+
+    ArbSummaryResponse:
+      type: object
+      properties:
+        pairs:
+          type: array
+          items:
+            $ref: "#/components/schemas/ArbPairSummary"
+        cachedAt:
+          type: string
+          description: ISO timestamp when cache was last populated
+      required:
+        - pairs
+        - cachedAt
+
+    ArbTimeSeriesPoint:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          description: ISO timestamp
+        bitmexAPR:
+          type: number
+        hlAPR:
+          type: number
+        fundingSpread:
+          type: number
+        bitmexPrice:
+          type: number
+        hlPrice:
+          type: number
+        priceSpreadPct:
+          type: number
+      required:
+        - timestamp
+        - bitmexAPR
+        - hlAPR
+        - fundingSpread
+        - bitmexPrice
+        - hlPrice
+        - priceSpreadPct
+
+    ArbDetailResponse:
+      type: object
+      properties:
+        summary:
+          $ref: "#/components/schemas/ArbPairSummary"
+        timeSeries:
+          type: array
+          items:
+            $ref: "#/components/schemas/ArbTimeSeriesPoint"
+      required:
+        - summary
+        - timeSeries

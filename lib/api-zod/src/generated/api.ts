@@ -14,3 +14,100 @@ import * as zod from "zod";
 export const HealthCheckResponse = zod.object({
   status: zod.string(),
 });
+
+/**
+ * Returns current funding rate and price spread metrics for all 9 BitMEX vs Hyperliquid asset pairs
+ * @summary Get arbitrage summary for all asset pairs
+ */
+export const GetArbSummaryResponse = zod.object({
+  pairs: zod.array(
+    zod.object({
+      pairId: zod.string(),
+      name: zod.string(),
+      bitmexSymbol: zod.string(),
+      hlSymbol: zod.string(),
+      bitmexCurrentAPR: zod
+        .number()
+        .describe("BitMEX latest annualized funding rate (%)"),
+      hlCurrentAPR: zod
+        .number()
+        .describe("Hyperliquid latest annualized funding rate (%)"),
+      fundingSpread: zod
+        .number()
+        .describe("BitMEX APR minus Hyperliquid APR (%)"),
+      priceSpreadPct: zod
+        .number()
+        .describe("Price basis (BitMEX price vs HL price, %)"),
+      consistencyScore: zod
+        .number()
+        .describe(
+          "Percentage of 5-min periods where BitMEX funding was lower than HL (0-100)",
+        ),
+      cumulativeYield: zod
+        .number()
+        .describe(
+          "Theoretical cumulative funding yield over the lookback period (%)",
+        ),
+      suggestion: zod
+        .enum(["LONG_BITMEX_SHORT_HL", "LONG_HL_SHORT_BITMEX", "NEUTRAL"])
+        .describe("Trade direction suggestion"),
+      lastUpdated: zod.string().describe("ISO timestamp of last data refresh"),
+    }),
+  ),
+  cachedAt: zod
+    .string()
+    .describe("ISO timestamp when cache was last populated"),
+});
+
+/**
+ * @summary Get detailed 14-day history for an asset pair
+ */
+export const GetArbDetailParams = zod.object({
+  pairId: zod.coerce.string().describe('Pair ID (e.g. \"1\" through \"9\")'),
+});
+
+export const GetArbDetailResponse = zod.object({
+  summary: zod.object({
+    pairId: zod.string(),
+    name: zod.string(),
+    bitmexSymbol: zod.string(),
+    hlSymbol: zod.string(),
+    bitmexCurrentAPR: zod
+      .number()
+      .describe("BitMEX latest annualized funding rate (%)"),
+    hlCurrentAPR: zod
+      .number()
+      .describe("Hyperliquid latest annualized funding rate (%)"),
+    fundingSpread: zod
+      .number()
+      .describe("BitMEX APR minus Hyperliquid APR (%)"),
+    priceSpreadPct: zod
+      .number()
+      .describe("Price basis (BitMEX price vs HL price, %)"),
+    consistencyScore: zod
+      .number()
+      .describe(
+        "Percentage of 5-min periods where BitMEX funding was lower than HL (0-100)",
+      ),
+    cumulativeYield: zod
+      .number()
+      .describe(
+        "Theoretical cumulative funding yield over the lookback period (%)",
+      ),
+    suggestion: zod
+      .enum(["LONG_BITMEX_SHORT_HL", "LONG_HL_SHORT_BITMEX", "NEUTRAL"])
+      .describe("Trade direction suggestion"),
+    lastUpdated: zod.string().describe("ISO timestamp of last data refresh"),
+  }),
+  timeSeries: zod.array(
+    zod.object({
+      timestamp: zod.string().describe("ISO timestamp"),
+      bitmexAPR: zod.number(),
+      hlAPR: zod.number(),
+      fundingSpread: zod.number(),
+      bitmexPrice: zod.number(),
+      hlPrice: zod.number(),
+      priceSpreadPct: zod.number(),
+    }),
+  ),
+});

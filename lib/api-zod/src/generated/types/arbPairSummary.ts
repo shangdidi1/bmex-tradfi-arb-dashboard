@@ -5,25 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-export interface HealthStatus {
-  status: string;
-}
-
-export interface ErrorResponse {
-  error: string;
-}
-
-/**
- * Trade direction suggestion
- */
-export type ArbPairSummarySuggestion =
-  (typeof ArbPairSummarySuggestion)[keyof typeof ArbPairSummarySuggestion];
-
-export const ArbPairSummarySuggestion = {
-  LONG_BITMEX_SHORT_HL: "LONG_BITMEX_SHORT_HL",
-  LONG_HL_SHORT_BITMEX: "LONG_HL_SHORT_BITMEX",
-  NEUTRAL: "NEUTRAL",
-} as const;
+import type { ArbPairSummarySuggestion } from "./arbPairSummarySuggestion";
 
 export interface ArbPairSummary {
   pairId: string;
@@ -46,26 +28,4 @@ export interface ArbPairSummary {
   suggestion: ArbPairSummarySuggestion;
   /** ISO timestamp of last data refresh */
   lastUpdated: string;
-}
-
-export interface ArbSummaryResponse {
-  pairs: ArbPairSummary[];
-  /** ISO timestamp when cache was last populated */
-  cachedAt: string;
-}
-
-export interface ArbTimeSeriesPoint {
-  /** ISO timestamp */
-  timestamp: string;
-  bitmexAPR: number;
-  hlAPR: number;
-  fundingSpread: number;
-  bitmexPrice: number;
-  hlPrice: number;
-  priceSpreadPct: number;
-}
-
-export interface ArbDetailResponse {
-  summary: ArbPairSummary;
-  timeSeries: ArbTimeSeriesPoint[];
 }

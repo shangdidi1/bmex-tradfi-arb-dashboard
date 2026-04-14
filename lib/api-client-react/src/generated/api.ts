@@ -13,7 +13,12 @@ import type {
   UseQueryResult,
 } from "@tanstack/react-query";
 
-import type { HealthStatus } from "./api.schemas";
+import type {
+  ArbDetailResponse,
+  ArbSummaryResponse,
+  ErrorResponse,
+  HealthStatus,
+} from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
 import type { ErrorType } from "../custom-fetch";
@@ -92,6 +97,169 @@ export function useHealthCheck<
   request?: SecondParameter<typeof customFetch>;
 }): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getHealthCheckQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Returns current funding rate and price spread metrics for all 9 BitMEX vs Hyperliquid asset pairs
+ * @summary Get arbitrage summary for all asset pairs
+ */
+export const getGetArbSummaryUrl = () => {
+  return `/api/arb/summary`;
+};
+
+export const getArbSummary = async (
+  options?: RequestInit,
+): Promise<ArbSummaryResponse> => {
+  return customFetch<ArbSummaryResponse>(getGetArbSummaryUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetArbSummaryQueryKey = () => {
+  return [`/api/arb/summary`] as const;
+};
+
+export const getGetArbSummaryQueryOptions = <
+  TData = Awaited<ReturnType<typeof getArbSummary>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getArbSummary>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetArbSummaryQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getArbSummary>>> = ({
+    signal,
+  }) => getArbSummary({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getArbSummary>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetArbSummaryQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getArbSummary>>
+>;
+export type GetArbSummaryQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get arbitrage summary for all asset pairs
+ */
+
+export function useGetArbSummary<
+  TData = Awaited<ReturnType<typeof getArbSummary>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getArbSummary>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetArbSummaryQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Get detailed 14-day history for an asset pair
+ */
+export const getGetArbDetailUrl = (pairId: string) => {
+  return `/api/arb/${pairId}`;
+};
+
+export const getArbDetail = async (
+  pairId: string,
+  options?: RequestInit,
+): Promise<ArbDetailResponse> => {
+  return customFetch<ArbDetailResponse>(getGetArbDetailUrl(pairId), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetArbDetailQueryKey = (pairId: string) => {
+  return [`/api/arb/${pairId}`] as const;
+};
+
+export const getGetArbDetailQueryOptions = <
+  TData = Awaited<ReturnType<typeof getArbDetail>>,
+  TError = ErrorType<ErrorResponse>,
+>(
+  pairId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getArbDetail>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetArbDetailQueryKey(pairId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getArbDetail>>> = ({
+    signal,
+  }) => getArbDetail(pairId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!pairId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getArbDetail>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetArbDetailQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getArbDetail>>
+>;
+export type GetArbDetailQueryError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Get detailed 14-day history for an asset pair
+ */
+
+export function useGetArbDetail<
+  TData = Awaited<ReturnType<typeof getArbDetail>>,
+  TError = ErrorType<ErrorResponse>,
+>(
+  pairId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getArbDetail>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetArbDetailQueryOptions(pairId, options);
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;
