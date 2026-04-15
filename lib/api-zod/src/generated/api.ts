@@ -38,6 +38,9 @@ export const GetArbSummaryResponse = zod.object({
       priceSpreadPct: zod
         .number()
         .describe("Price basis (BitMEX price vs HL price, %)"),
+      bitmexOpenInterestUsdt: zod
+        .number()
+        .describe("BitMEX open interest notional value in USDT"),
       consistencyScore: zod
         .number()
         .describe(
@@ -106,6 +109,9 @@ export const GetArbDetailResponse = zod.object({
     priceSpreadPct: zod
       .number()
       .describe("Price basis (BitMEX price vs HL price, %)"),
+    bitmexOpenInterestUsdt: zod
+      .number()
+      .describe("BitMEX open interest notional value in USDT"),
     consistencyScore: zod
       .number()
       .describe(

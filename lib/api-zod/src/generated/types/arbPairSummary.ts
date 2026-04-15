@@ -20,6 +20,8 @@ export interface ArbPairSummary {
   fundingSpread: number;
   /** Price basis (BitMEX price vs HL price, %) */
   priceSpreadPct: number;
+  /** BitMEX open interest notional value in USDT */
+  bitmexOpenInterestUsdt: number;
   /** 14-day percentage of 5-min periods where BitMEX funding was lower than HL (0-100) */
   consistencyScore: number;
   /** 14-day cumulative arb yield (always positive, %) */

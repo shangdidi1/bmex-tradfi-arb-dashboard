@@ -108,6 +108,9 @@ components:
         priceSpreadPct:
           type: number
           description: Price basis (BitMEX price vs HL price, %)
+        bitmexOpenInterestUsdt:
+          type: number
+          description: BitMEX open interest notional value in USDT
         consistencyScore:
           type: number
           description: 14-day percentage of 5-min periods where BitMEX funding was lower than HL (0-100)
@@ -148,6 +151,7 @@ components:
         - hlCurrentAPR
         - fundingSpread
         - priceSpreadPct
+        - bitmexOpenInterestUsdt
         - consistencyScore
         - cumulativeYield
         - consistency7d

@@ -101,7 +101,11 @@ export default function Dashboard() {
       cell: ({ row }) => (
         <div>
           <div className="font-semibold text-gray-100">{row.original.name}</div>
-          <div className="text-xs text-gray-500">{row.original.bitmexSymbol} / {row.original.hlSymbol}</div>
+          {row.original.bitmexOpenInterestUsdt > 0 && (
+            <div className="text-[11px] text-gray-500 mt-0.5">
+              OI ${new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(row.original.bitmexOpenInterestUsdt)} USDT
+            </div>
+          )}
         </div>
       )
     },
@@ -190,7 +194,7 @@ export default function Dashboard() {
     getSortedRowModel: getSortedRowModel(),
   });
 
-  const totalLongBitmex = summaryData.filter(d => d.suggestion === "LONG_BITMEX_SHORT_HL").length;
+  const highYieldPairs = summaryData.filter(d => (d.annYield7d ?? 0) > 20).length;
   const avgSpread = summaryData.length ? summaryData.reduce((acc, d) => acc + d.fundingSpread, 0) / summaryData.length : 0;
   const avgConsistency = summaryData.length ? summaryData.reduce((acc, d) => acc + d.consistencyScore, 0) / summaryData.length : 0;
 
@@ -246,31 +250,43 @@ export default function Dashboard() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <Card className="bg-[#1a1f2e] border-gray-800">
             <CardContent className="p-6">
-              <p className="text-sm text-gray-400">Pairs Favoring BitMEX</p>
+              <p className="text-sm text-gray-400">High-Yield Opportunities (7d &gt;20%)</p>
               {loading && !summaryData.length ? (
                 <Skeleton className="h-8 w-16 mt-1 bg-gray-700" />
               ) : (
-                <p className="text-3xl font-bold mt-1 text-green-400">{totalLongBitmex} <span className="text-lg text-gray-500 font-normal">/ {summaryData.length}</span></p>
+                <p className="text-3xl font-bold mt-1 text-green-400">{highYieldPairs} <span className="text-lg text-gray-500 font-normal">/ {summaryData.length}</span></p>
               )}
             </CardContent>
           </Card>
           <Card className="bg-[#1a1f2e] border-gray-800">
             <CardContent className="p-6">
-              <p className="text-sm text-gray-400">Average Funding Spread</p>
+              <p className="text-sm text-gray-400">Highest 7-Day Yield</p>
               {loading && !summaryData.length ? (
                 <Skeleton className="h-8 w-24 mt-1 bg-gray-700" />
               ) : (
-                <p className={`text-3xl font-bold mt-1 ${avgSpread < 0 ? 'text-green-400' : 'text-red-400'}`}>{formatPercent(avgSpread)}</p>
+                <p className="text-3xl font-bold mt-1 text-green-400">
+                  {summaryData.length > 0 ? formatPercent(Math.max(...summaryData.map(d => d.annYield7d ?? 0))) : '0.000%'}
+                </p>
               )}
             </CardContent>
           </Card>
           <Card className="bg-[#1a1f2e] border-gray-800">
             <CardContent className="p-6">
-              <p className="text-sm text-gray-400">Average Consistency</p>
+              <div className="flex items-center gap-1.5">
+                <p className="text-sm text-gray-400">Highest Consistency</p>
+                <div className="group relative">
+                  <Info className="w-3.5 h-3.5 text-gray-500 cursor-help" />
+                  <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 w-56 hidden group-hover:block bg-gray-900 text-gray-300 text-xs rounded-md px-3 py-2 border border-gray-700 shadow-lg z-10">
+                    Consistency = % of time the cheaper venue stayed cheaper over the window. Higher means the trade direction is more reliable and less likely to flip.
+                  </div>
+                </div>
+              </div>
               {loading && !summaryData.length ? (
                 <Skeleton className="h-8 w-24 mt-1 bg-gray-700" />
               ) : (
-                <p className="text-3xl font-bold mt-1 text-gray-100">{avgConsistency.toFixed(1)}%</p>
+                <p className="text-3xl font-bold mt-1 text-gray-100">
+                  {summaryData.length > 0 ? `${Math.max(...summaryData.map(d => d.consistency7d ?? 0)).toFixed(1)}%` : '0.0%'}
+                </p>
               )}
             </CardContent>
           </Card>
@@ -586,6 +602,11 @@ function DetailView({ pairId, onClose, summary }: { pairId: string, onClose: () 
               <Card className="bg-[#1a1f2e] border-gray-800">
                 <CardHeader className="pb-2 px-4 pt-4">
                   <CardTitle className="text-base font-medium text-gray-200">Price Basis % (BitMEX vs HL)</CardTitle>
+                  {(pairId === "6" || pairId === "7") && (
+                    <p className="text-xs text-gray-500 mt-1">
+                      Note: BitMEX trades the ETF while Hyperliquid tracks the underlying index. The spread shown is normalized to show deviation from the average structural difference.
+                    </p>
+                  )}
                 </CardHeader>
                 <CardContent className="px-2">
                   <ResponsiveContainer width="100%" height={300} debounce={0}>

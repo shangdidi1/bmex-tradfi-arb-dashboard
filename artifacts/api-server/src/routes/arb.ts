@@ -13,7 +13,7 @@ const PAIRS: Record<string, { name: string; bitmex: string; hl: string }> = {
   "4": { name: "Silver", bitmex: "XAGUSDT", hl: "xyz:SILVER" },
   "5": { name: "Gold", bitmex: "XAUTUSDT", hl: "xyz:GOLD" },
   "6": { name: "S&P 500 (SPY)", bitmex: "SPYUSDT", hl: "xyz:SP500" },
-  "7": { name: "Nasdaq 100 (QQQ)", bitmex: "QQQUSDT", hl: "xyz:QQQ100" },
+  "7": { name: "Nasdaq 100 (QQQ)", bitmex: "QQQUSDT", hl: "xyz:XYZ100" },
   "8": { name: "Coinbase (COIN)", bitmex: "COINUSDT", hl: "xyz:COIN" },
   "9": { name: "Robinhood (HOOD)", bitmex: "HOODUSDT", hl: "xyz:HOOD" },
 };
@@ -43,6 +43,7 @@ interface PairSummary {
   hlCurrentAPR: number;
   fundingSpread: number;
   priceSpreadPct: number;
+  bitmexOpenInterestUsdt: number;
   // 14-day (legacy, kept for detail view)
   consistencyScore: number;
   cumulativeYield: number;
@@ -70,17 +71,44 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+async function fetchBitmexInstrument(symbol: string): Promise<{ openInterest?: number; openValueUsdt?: number } | null> {
+  try {
+    const url = `https://www.bitmex.com/api/v1/instrument?symbol=${encodeURIComponent(symbol)}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      logger.warn({ symbol, status: res.status, statusText: res.statusText }, "BitMEX instrument returned non-OK status");
+      return null;
+    }
+    const data = await res.json() as Array<{ openInterest?: number; openValue?: number; quoteToSettleMultiplier?: number }>;
+    const item = data[0];
+    if (!item) return null;
+    const multiplier = item.quoteToSettleMultiplier ?? 1_000_000;
+    return {
+      openInterest: item.openInterest,
+      openValueUsdt: item.openValue ? item.openValue / multiplier : 0,
+    };
+  } catch (err) {
+    logger.warn({ symbol, err }, "BitMEX instrument request failed");
+    return null;
+  }
+}
+
 async function fetchBitmexFundingHistory(symbol: string): Promise<Array<{ ts: number; apr: number }>> {
   const result: Array<{ ts: number; apr: number }> = [];
   const endTime = Date.now();
   const startTime = endTime - DAYS_LOOKBACK * 24 * 60 * 60 * 1000;
   let currentStart = new Date(startTime).toISOString();
+  let hadError = false;
 
   while (true) {
     try {
       const url = `https://www.bitmex.com/api/v1/funding?symbol=${encodeURIComponent(symbol)}&count=500&startTime=${encodeURIComponent(currentStart)}&reverse=false`;
       const res = await fetch(url);
-      if (!res.ok) break;
+      if (!res.ok) {
+        hadError = true;
+        logger.warn({ symbol, status: res.status, statusText: res.statusText }, "BitMEX funding returned non-OK status");
+        break;
+      }
       const history = await res.json() as Array<{ timestamp: string; fundingRate?: number }>;
       if (!history.length) break;
 
@@ -95,9 +123,14 @@ async function fetchBitmexFundingHistory(symbol: string): Promise<Array<{ ts: nu
       const lastDt = new Date(history[history.length - 1].timestamp).getTime() + 1000;
       currentStart = new Date(lastDt).toISOString();
       await sleep(600);
-    } catch {
+    } catch (err) {
+      hadError = true;
+      logger.warn({ symbol, err }, "BitMEX funding request failed");
       break;
     }
+  }
+  if (hadError && result.length === 0) {
+    logger.warn({ symbol }, "BitMEX funding returned no data due to errors");
   }
   return result;
 }
@@ -109,6 +142,7 @@ async function fetchHyperliquidFundingHistory(coin: string): Promise<Array<{ ts:
   const chunkMs = 3 * 24 * 60 * 60 * 1000;
 
   let cur = startTimeMs;
+  let hadError = false;
   while (cur < endTimeMs) {
     const chunkEnd = Math.min(endTimeMs, cur + chunkMs);
     try {
@@ -126,12 +160,19 @@ async function fetchHyperliquidFundingHistory(coin: string): Promise<Array<{ ts:
             result.push({ ts, apr });
           }
         }
+      } else {
+        hadError = true;
+        logger.warn({ coin, status: res.status, statusText: res.statusText }, "Hyperliquid fundingHistory returned non-OK status");
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      hadError = true;
+      logger.warn({ coin, err }, "Hyperliquid fundingHistory request failed");
     }
     cur = chunkEnd;
     await sleep(150);
+  }
+  if (hadError && result.length === 0) {
+    logger.warn({ coin }, "Hyperliquid fundingHistory returned no data due to errors");
   }
   return result;
 }
@@ -141,12 +182,17 @@ async function fetchBitmexPriceHistory(symbol: string): Promise<Array<{ ts: numb
   const endTime = Date.now();
   const startTime = endTime - DAYS_LOOKBACK * 24 * 60 * 60 * 1000;
   let currentStart = new Date(startTime).toISOString();
+  let hadError = false;
 
   while (true) {
     try {
       const url = `https://www.bitmex.com/api/v1/trade/bucketed?binSize=5m&symbol=${encodeURIComponent(symbol)}&count=500&startTime=${encodeURIComponent(currentStart)}&reverse=false&partial=false`;
       const res = await fetch(url);
-      if (!res.ok) break;
+      if (!res.ok) {
+        hadError = true;
+        logger.warn({ symbol, status: res.status, statusText: res.statusText }, "BitMEX price history returned non-OK status");
+        break;
+      }
       const history = await res.json() as Array<{ timestamp: string; close?: number }>;
       if (!history.length) break;
 
@@ -159,9 +205,14 @@ async function fetchBitmexPriceHistory(symbol: string): Promise<Array<{ ts: numb
       const lastDt = new Date(history[history.length - 1].timestamp).getTime() + 1000;
       currentStart = new Date(lastDt).toISOString();
       await sleep(600);
-    } catch {
+    } catch (err) {
+      hadError = true;
+      logger.warn({ symbol, err }, "BitMEX price history request failed");
       break;
     }
+  }
+  if (hadError && result.length === 0) {
+    logger.warn({ symbol }, "BitMEX price history returned no data due to errors");
   }
   return result;
 }
@@ -173,6 +224,7 @@ async function fetchHyperliquidPriceHistory(coin: string): Promise<Array<{ ts: n
   const chunkMs = 3 * 24 * 60 * 60 * 1000;
 
   let cur = startTimeMs;
+  let hadError = false;
   while (cur < endTimeMs) {
     const chunkEnd = Math.min(endTimeMs, cur + chunkMs);
     try {
@@ -189,12 +241,19 @@ async function fetchHyperliquidPriceHistory(coin: string): Promise<Array<{ ts: n
             result.push({ ts, price: parseFloat(c.c) });
           }
         }
+      } else {
+        hadError = true;
+        logger.warn({ coin, status: res.status, statusText: res.statusText }, "Hyperliquid candleSnapshot returned non-OK status");
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      hadError = true;
+      logger.warn({ coin, err }, "Hyperliquid candleSnapshot request failed");
     }
     cur = chunkEnd;
     await sleep(150);
+  }
+  if (hadError && result.length === 0) {
+    logger.warn({ coin }, "Hyperliquid candleSnapshot returned no data due to errors");
   }
   return result;
 }
@@ -302,6 +361,7 @@ function computeSummary(
   name: string,
   bitmexSymbol: string,
   hlSymbol: string,
+  bitmexOpenInterestUsdt: number,
 ): PairSummary {
   const spread = currentBmexAPR - currentHlAPR;
 
@@ -332,6 +392,7 @@ function computeSummary(
     hlCurrentAPR: parseFloat(currentHlAPR.toFixed(4)),
     fundingSpread: parseFloat(spread.toFixed(4)),
     priceSpreadPct: parseFloat(priceSpreadPct.toFixed(4)),
+    bitmexOpenInterestUsdt,
     // 14-day legacy fields (kept for detail view)
     consistencyScore: w14.consistencyScore,
     cumulativeYield: w14.cumulativeYield,
@@ -353,24 +414,47 @@ async function buildPairDetail(pairId: string): Promise<{ summary: PairSummary; 
 
   logger.info({ pairId, symbol: pair.bitmex }, "Fetching detail data for pair");
 
-  const [bmexFunding, hlFunding, bmexPrice, hlPrice] = await Promise.all([
+  const [bmexFunding, hlFunding, bmexPrice, hlPrice, bmexInstrument] = await Promise.all([
     fetchBitmexFundingHistory(pair.bitmex),
     fetchHyperliquidFundingHistory(pair.hl),
     fetchBitmexPriceHistory(pair.bitmex),
     fetchHyperliquidPriceHistory(pair.hl),
+    fetchBitmexInstrument(pair.bitmex),
   ]);
+
+  const hlFundingMissing = hlFunding.length === 0;
+  const hlPriceMissing = hlPrice.length === 0;
+  if (hlFundingMissing || hlPriceMissing) {
+    logger.warn(
+      { pairId, hlFunding: hlFunding.length, hlPrice: hlPrice.length, hlSymbol: pair.hl },
+      hlFundingMissing && hlPriceMissing ? "Hyperliquid data unavailable for pair" : "Partial Hyperliquid data for pair",
+    );
+  }
 
   logger.info(
     { pairId, bmexFunding: bmexFunding.length, hlFunding: hlFunding.length, bmexPrice: bmexPrice.length, hlPrice: hlPrice.length },
     "Data fetched",
   );
 
-  const timeSeries = buildTimeSeries(bmexFunding, hlFunding, bmexPrice, hlPrice);
+  let timeSeries = buildTimeSeries(bmexFunding, hlFunding, bmexPrice, hlPrice);
+
+  // For ETF/Index pairs, normalize price spread by subtracting the mean structural difference
+  // so the chart shows deviation rather than the persistent ETF premium/discount.
+  if (pairId === "6" || pairId === "7") {
+    const validSpreads = timeSeries.map((p) => p.priceSpreadPct).filter((v) => v !== 0);
+    if (validSpreads.length > 0) {
+      const meanSpread = validSpreads.reduce((a, b) => a + b, 0) / validSpreads.length;
+      timeSeries = timeSeries.map((p) => ({
+        ...p,
+        priceSpreadPct: parseFloat((p.priceSpreadPct - meanSpread).toFixed(4)),
+      }));
+    }
+  }
 
   const currentBmexAPR = bmexFunding.length > 0 ? bmexFunding[bmexFunding.length - 1].apr : 0;
   const currentHlAPR = hlFunding.length > 0 ? hlFunding[hlFunding.length - 1].apr : 0;
 
-  const summary = computeSummary(pairId, timeSeries, currentBmexAPR, currentHlAPR, pair.name, pair.bitmex, pair.hl);
+  const summary = computeSummary(pairId, timeSeries, currentBmexAPR, currentHlAPR, pair.name, pair.bitmex, pair.hl, bmexInstrument?.openValueUsdt ?? 0);
   return { summary, timeSeries };
 }
 
