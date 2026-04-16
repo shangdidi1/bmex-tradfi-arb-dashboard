@@ -228,7 +228,7 @@ export default function Dashboard() {
               <span className="text-[#FF6D00]">BitMEX</span>
               <span>TradFi Perps Arbitrage Monitor</span>
             </h1>
-            <p className="text-gray-400 mt-1.5 text-[14px]">Compare TradFi perpetual contracts with Hyperliquid to find low-cost funding venues.</p>
+            <p className="text-gray-400 mt-1.5 text-[14px]">TradFi Arbitrage, Exclusively on BitMEX</p>
           </div>
           <div className="flex flex-col items-end gap-2 pt-2">
             <div className="flex items-center gap-3">
