@@ -16,6 +16,19 @@ const PAIRS: Record<string, { name: string; bitmex: string; hl: string }> = {
   "7": { name: "Nasdaq 100 (QQQ)", bitmex: "QQQUSDT", hl: "xyz:XYZ100" },
   "8": { name: "Coinbase (COIN)", bitmex: "COINUSDT", hl: "xyz:COIN" },
   "9": { name: "Robinhood (HOOD)", bitmex: "HOODUSDT", hl: "xyz:HOOD" },
+  "10": { name: "Tesla", bitmex: "TSLAUSDT", hl: "xyz:TSLA" },
+  "11": { name: "NVIDIA", bitmex: "NVDAUSDT", hl: "xyz:NVDA" },
+  "12": { name: "Meta", bitmex: "METAUSDT", hl: "xyz:META" },
+  "13": { name: "Apple", bitmex: "AAPLUSDT", hl: "xyz:AAPL" },
+  "14": { name: "Amazon", bitmex: "AMZNUSDT", hl: "xyz:AMZN" },
+  "15": { name: "Microsoft", bitmex: "MSFTUSDT", hl: "xyz:MSFT" },
+  "16": { name: "Google", bitmex: "GOOGLUSDT", hl: "xyz:GOOGL" },
+  "17": { name: "Palantir", bitmex: "PLTRUSDT", hl: "xyz:PLTR" },
+  "18": { name: "Intel", bitmex: "INTCUSDT", hl: "xyz:INTC" },
+  "19": { name: "Oracle", bitmex: "ORCLUSDT", hl: "xyz:ORCL" },
+  "20": { name: "MicroStrategy", bitmex: "MSTRUSDT", hl: "xyz:MSTR" },
+  "21": { name: "Netflix", bitmex: "NFLXUSDT", hl: "xyz:NFLX" },
+  "22": { name: "EUR/USD", bitmex: "EURUSD", hl: "xyz:EURUSD" },
 };
 
 interface TimeSeriesPoint {
