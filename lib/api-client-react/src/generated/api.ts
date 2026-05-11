@@ -270,6 +270,87 @@ export function useGetArbDetail<
 }
 
 /**
+ * Re-fetches orderbooks + current funding for all 22 pairs in parallel and recomputes
+summaries, returning the same shape as /arb/summary. Historical metrics (consistency,
+annYield, timeSeries) are carried over from the last cron refresh — this endpoint
+refreshes only the current-snapshot fields. Rate-limited to one call per 15 seconds
+server-wide.
+
+ * @summary Live refresh of the summary across all pairs
+ */
+export const getGetArbSummaryLiveUrl = () => {
+  return `/api/arb/summary/live`;
+};
+
+export const getArbSummaryLive = async (
+  options?: RequestInit,
+): Promise<ArbSummaryResponse> => {
+  return customFetch<ArbSummaryResponse>(getGetArbSummaryLiveUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetArbSummaryLiveQueryKey = () => {
+  return [`/api/arb/summary/live`] as const;
+};
+
+export const getGetArbSummaryLiveQueryOptions = <
+  TData = Awaited<ReturnType<typeof getArbSummaryLive>>,
+  TError = ErrorType<ErrorResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getArbSummaryLive>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetArbSummaryLiveQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getArbSummaryLive>>
+  > = ({ signal }) => getArbSummaryLive({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getArbSummaryLive>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetArbSummaryLiveQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getArbSummaryLive>>
+>;
+export type GetArbSummaryLiveQueryError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Live refresh of the summary across all pairs
+ */
+
+export function useGetArbSummaryLive<
+  TData = Awaited<ReturnType<typeof getArbSummaryLive>>,
+  TError = ErrorType<ErrorResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getArbSummaryLive>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetArbSummaryLiveQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
  * Fetches fresh top-of-book + current funding rate directly from BitMEX & Hyperliquid,
 bypassing the cached DB snapshot. Does NOT re-fetch 30-day history. Intended for
 on-demand per-pair refresh from the dashboard. Rate-limited to 1 call per ~10s per pair

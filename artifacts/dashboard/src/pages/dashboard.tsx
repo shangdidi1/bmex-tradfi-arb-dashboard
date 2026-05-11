@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
-import { useGetArbSummary, useGetArbDetail, getArbLive, getGetArbSummaryQueryKey, getGetArbDetailQueryKey } from "@workspace/api-client-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useGetArbSummary, useGetArbDetail, getArbLive, getArbSummaryLive, getGetArbSummaryQueryKey, getGetArbDetailQueryKey } from "@workspace/api-client-react";
 import type { ArbPairSummary, ArbLiveResponse, BookLevel } from "@workspace/api-client-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area, ReferenceLine
@@ -284,10 +285,37 @@ function CustomTooltip({ active, payload, label }: CustomTooltipProps) {
 }
 
 export default function Dashboard() {
-  const { data, isLoading, isFetching, dataUpdatedAt, refetch } = useGetArbSummary({
+  const queryClient = useQueryClient();
+  const { data, isLoading, isFetching, dataUpdatedAt } = useGetArbSummary({
     query: { queryKey: getGetArbSummaryQueryKey(), refetchInterval: 300_000 }
   });
   const summaryData = data?.pairs || [];
+
+  // Main Refresh button: calls /api/arb/summary/live which fans out live fetches
+  // for all pairs (fresh orderbooks + current funding) and returns recomputed summaries.
+  // Historical fields (consistency/annYield/timeSeries) are carried over from the last
+  // cron refresh — this endpoint only updates current-snapshot fields.
+  const [refreshLive, setRefreshLive] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const onRefreshLive = async () => {
+    if (refreshLive) return;
+    setRefreshLive(true);
+    setRefreshError(null);
+    try {
+      const fresh = await getArbSummaryLive();
+      queryClient.setQueryData(getGetArbSummaryQueryKey(), fresh);
+    } catch (e) {
+      const status = (e as { status?: number } | undefined)?.status;
+      if (status === 429) {
+        const retryAfter = (e as { headers?: Headers })?.headers?.get?.("retry-after");
+        setRefreshError(`Rate limited — try again in ${retryAfter ? `${retryAfter}s` : "a few seconds"}.`);
+      } else {
+        setRefreshError(e instanceof Error ? e.message : "Refresh failed");
+      }
+    } finally {
+      setRefreshLive(false);
+    }
+  };
 
   const [selectedPairId, setSelectedPairId] = useState<string | null>(null);
 
@@ -471,17 +499,7 @@ export default function Dashboard() {
       })()
     : null;
 
-  const [isSpinning, setIsSpinning] = useState(false);
   const loading = isLoading || isFetching;
-
-  useEffect(() => {
-    if (loading) {
-      setIsSpinning(true);
-      return;
-    }
-    const t = setTimeout(() => setIsSpinning(false), 600);
-    return () => clearTimeout(t);
-  }, [loading]);
 
   return (
     <div className="min-h-screen bg-[#0f111a] text-gray-200 px-5 py-4 pt-[32px] pb-[32px] pl-[24px] pr-[24px]">
@@ -498,18 +516,22 @@ export default function Dashboard() {
           </div>
           <div className="flex flex-col items-end gap-2 pt-2">
             <div className="flex items-center gap-3">
-              <span className="text-xs text-gray-500">Data refreshed every 10 min</span>
+              <span className="text-xs text-gray-500">Cron every 10 min · click to force-refresh now</span>
               <button
-                onClick={() => refetch()}
-                disabled={loading}
+                onClick={onRefreshLive}
+                disabled={refreshLive}
                 className="flex items-center gap-1 px-3 py-1.5 h-[32px] rounded border border-gray-700 bg-gray-800 text-sm hover:bg-gray-700 transition-colors disabled:opacity-50 text-gray-300"
-                title="Re-reads the server cache. Fresh data comes from the 10-min cron — for a live snapshot, open a pair and use 'Refresh this pair'."
+                title="Fan out live fetches across all pairs (orderbooks + current funding). Takes ~3 seconds. Rate-limited to one call every 15s server-wide."
               >
-                <RefreshCw className={`w-4 h-4 ${isSpinning ? "animate-spin" : ""}`} />
-                Refresh cache
+                <RefreshCw className={`w-4 h-4 ${refreshLive ? "animate-spin" : ""}`} />
+                {refreshLive ? "Refreshing…" : "Refresh all"}
               </button>
             </div>
-            {lastRefreshed && <p className="text-[12px] text-gray-500">Last update: {lastRefreshed}</p>}
+            {refreshError ? (
+              <p className="text-[12px] text-amber-400">{refreshError}</p>
+            ) : lastRefreshed ? (
+              <p className="text-[12px] text-gray-500">Last update: {lastRefreshed}</p>
+            ) : null}
           </div>
         </div>
 

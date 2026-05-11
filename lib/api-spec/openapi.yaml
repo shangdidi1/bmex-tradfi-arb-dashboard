@@ -67,6 +67,31 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /arb/summary/live:
+    get:
+      operationId: getArbSummaryLive
+      tags: [arb]
+      summary: Live refresh of the summary across all pairs
+      description: |
+        Re-fetches orderbooks + current funding for all 22 pairs in parallel and recomputes
+        summaries, returning the same shape as /arb/summary. Historical metrics (consistency,
+        annYield, timeSeries) are carried over from the last cron refresh — this endpoint
+        refreshes only the current-snapshot fields. Rate-limited to one call per 15 seconds
+        server-wide.
+      responses:
+        "200":
+          description: Live summary across all pairs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArbSummaryResponse"
+        "429":
+          description: Rate limited — try again in a few seconds
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /arb/{pairId}/live:
     get:
       operationId: getArbLive

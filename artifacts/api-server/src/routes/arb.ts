@@ -797,6 +797,81 @@ router.get("/arb/summary", async (_req, res): Promise<void> => {
   }
 });
 
+// GET /api/arb/summary/live — fans out per-pair live fetches for all pairs and
+// recomputes summaries using cached time-series (history is refreshed by cron, not here).
+// This is what the "Refresh" button in the summary header should call — unlike /summary
+// which just re-reads DB, this actually pulls fresh orderbooks + current funding.
+// Global cooldown: 15s between calls server-wide to avoid hammering exchanges.
+const SUMMARY_LIVE_COOLDOWN_MS = 15_000;
+let summaryLiveLastCallAt = 0;
+
+router.get("/arb/summary/live", async (_req, res): Promise<void> => {
+  const now = Date.now();
+  if (now - summaryLiveLastCallAt < SUMMARY_LIVE_COOLDOWN_MS) {
+    const retryAfter = Math.ceil((SUMMARY_LIVE_COOLDOWN_MS - (now - summaryLiveLastCallAt)) / 1000);
+    res.setHeader("Retry-After", String(retryAfter));
+    res.status(429).json({ error: `Rate limited — try again in ${retryAfter}s` });
+    return;
+  }
+  summaryLiveLastCallAt = now;
+
+  try {
+    const rows = await db.select().from(pairSnapshots);
+    if (rows.length === 0) {
+      res.json({ pairs: [], cachedAt: null, status: "bootstrapping" });
+      return;
+    }
+
+    // Build map of cached details (for time-series re-use).
+    const cached = new Map<string, PairDetail>();
+    for (const row of rows) cached.set(row.pairId, row.data as PairDetail);
+
+    // Fan out fresh fetches for every pair in parallel. Each pair's block calls:
+    //   BMEX orderbook + HL orderbook + BMEX latest funding + HL latest funding + BMEX instrument.
+    // That's 22 × 5 = ~110 outbound calls, but the HL rate-limiter and BMEX's own
+    // capacity absorb them easily — completes in ~2-4 seconds wall time.
+    const results = await Promise.allSettled(Object.keys(PAIRS).map(async (pairId) => {
+      const pair = PAIRS[pairId];
+      const prior = cached.get(pairId);
+      if (!prior) return null;
+
+      const [bmexBookRaw, hlBook, bmexAPR, hlAPR, bmexInstrument] = await Promise.all([
+        fetchBitmexOrderbookTop(pair.bitmex),
+        fetchHyperliquidOrderbookTop(pair.hl),
+        fetchBitmexLatestFundingAPR(pair.bitmex),
+        fetchHyperliquidLatestFundingAPR(pair.hl),
+        fetchBitmexInstrument(pair.bitmex),
+      ]);
+      const bmexBook = normalizeBookSizes(bmexBookRaw, bmexInstrument?.underlyingToPositionMultiplier ?? 1);
+
+      const summary = computeSummary(
+        pairId,
+        prior.timeSeries,
+        bmexAPR,
+        hlAPR,
+        pair.name,
+        pair.bitmex,
+        pair.hl,
+        bmexInstrument?.openValueUsdt ?? prior.summary.bitmexOpenInterestUsdt,
+        bmexBook,
+        hlBook,
+      );
+      return summary;
+    }));
+
+    const pairs: PairSummary[] = [];
+    for (const r of results) {
+      if (r.status === "fulfilled" && r.value) pairs.push(r.value);
+    }
+    pairs.sort((a, b) => parseInt(a.pairId) - parseInt(b.pairId));
+
+    res.json({ pairs, cachedAt: new Date().toISOString() });
+  } catch (err) {
+    logger.error({ err }, "Error computing live summary");
+    res.status(500).json({ error: "Failed to fetch live summary" });
+  }
+});
+
 // GET /api/arb/:pairId/live — lightweight on-demand refresh for one pair.
 // Fetches fresh orderbooks + current funding (no 30-day history), bypassing the DB.
 // Intended for the "Refresh this pair" button in the detail view.

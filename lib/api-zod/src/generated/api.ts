@@ -437,6 +437,221 @@ export const GetArbDetailResponse = zod.object({
 });
 
 /**
+ * Re-fetches orderbooks + current funding for all 22 pairs in parallel and recomputes
+summaries, returning the same shape as /arb/summary. Historical metrics (consistency,
+annYield, timeSeries) are carried over from the last cron refresh — this endpoint
+refreshes only the current-snapshot fields. Rate-limited to one call per 15 seconds
+server-wide.
+
+ * @summary Live refresh of the summary across all pairs
+ */
+export const GetArbSummaryLiveResponse = zod.object({
+  pairs: zod.array(
+    zod.object({
+      pairId: zod.string(),
+      name: zod.string(),
+      bitmexSymbol: zod.string(),
+      hlSymbol: zod.string(),
+      bitmexCurrentAPR: zod
+        .number()
+        .describe("BitMEX latest annualized funding rate (%)"),
+      hlCurrentAPR: zod
+        .number()
+        .describe("Hyperliquid latest annualized funding rate (%)"),
+      fundingSpread: zod
+        .number()
+        .describe("BitMEX APR minus Hyperliquid APR (%)"),
+      priceSpreadPct: zod
+        .number()
+        .describe("Price basis (BitMEX price vs HL price, %)"),
+      bitmexOpenInterestUsdt: zod
+        .number()
+        .describe("BitMEX open interest notional value in USDT"),
+      consistencyScore: zod
+        .number()
+        .describe(
+          "14-day percentage of 5-min periods where BitMEX funding was lower than HL (0-100)",
+        ),
+      cumulativeYield: zod
+        .number()
+        .describe("14-day cumulative arb yield (always positive, %)"),
+      consistency7d: zod
+        .number()
+        .describe(
+          "7-day consistency score (% of periods BitMEX was cheaper, 0-100)",
+        ),
+      consistency14d: zod
+        .number()
+        .describe(
+          "14-day consistency score (% of periods BitMEX was cheaper, 0-100)",
+        ),
+      consistency30d: zod
+        .number()
+        .describe(
+          "30-day consistency score (% of periods BitMEX was cheaper, 0-100)",
+        ),
+      annYield7d: zod
+        .number()
+        .describe("7-day annualized arb yield (always positive, %)"),
+      annYield14d: zod
+        .number()
+        .describe("14-day annualized arb yield (always positive, %)"),
+      annYield30d: zod
+        .number()
+        .describe("30-day annualized arb yield (always positive, %)"),
+      suggestion: zod
+        .enum(["LONG_BITMEX_SHORT_HL", "LONG_HL_SHORT_BITMEX", "NEUTRAL"])
+        .describe("Trade direction suggestion"),
+      lastUpdated: zod.string().describe("ISO timestamp of last data refresh"),
+      bmexBid: zod
+        .number()
+        .nullish()
+        .describe("BitMEX best bid price; null if orderbook fetch failed"),
+      bmexAsk: zod
+        .number()
+        .nullish()
+        .describe("BitMEX best ask price; null if orderbook fetch failed"),
+      hlBid: zod
+        .number()
+        .nullish()
+        .describe("Hyperliquid best bid price; null if orderbook fetch failed"),
+      hlAsk: zod
+        .number()
+        .nullish()
+        .describe("Hyperliquid best ask price; null if orderbook fetch failed"),
+      bmexBidSize: zod
+        .number()
+        .nullish()
+        .describe(
+          "BitMEX size at best bid, in base-coin units. Multiply by bmexBid for USD notional. Null if orderbook fetch failed.",
+        ),
+      bmexAskSize: zod
+        .number()
+        .nullish()
+        .describe(
+          "BitMEX size at best ask, in base-coin units. Multiply by bmexAsk for USD notional. Null if orderbook fetch failed.",
+        ),
+      hlBidSize: zod
+        .number()
+        .nullish()
+        .describe(
+          "Hyperliquid size at best bid, in base coin units. Null if orderbook fetch failed.",
+        ),
+      hlAskSize: zod
+        .number()
+        .nullish()
+        .describe(
+          "Hyperliquid size at best ask, in base coin units. Null if orderbook fetch failed.",
+        ),
+      bmexBids: zod
+        .array(
+          zod.object({
+            px: zod.number().describe("Price at this level"),
+            size: zod
+              .number()
+              .describe("Size at this level in base-coin units"),
+          }),
+        )
+        .nullish()
+        .describe(
+          "BitMEX top-5 bid levels (highest first). Null if orderbook fetch failed.",
+        ),
+      bmexAsks: zod
+        .array(
+          zod.object({
+            px: zod.number().describe("Price at this level"),
+            size: zod
+              .number()
+              .describe("Size at this level in base-coin units"),
+          }),
+        )
+        .nullish()
+        .describe(
+          "BitMEX top-5 ask levels (lowest first). Null if orderbook fetch failed.",
+        ),
+      hlBids: zod
+        .array(
+          zod.object({
+            px: zod.number().describe("Price at this level"),
+            size: zod
+              .number()
+              .describe("Size at this level in base-coin units"),
+          }),
+        )
+        .nullish()
+        .describe(
+          "Hyperliquid top-5 bid levels (highest first). Null if orderbook fetch failed.",
+        ),
+      hlAsks: zod
+        .array(
+          zod.object({
+            px: zod.number().describe("Price at this level"),
+            size: zod
+              .number()
+              .describe("Size at this level in base-coin units"),
+          }),
+        )
+        .nullish()
+        .describe(
+          "Hyperliquid top-5 ask levels (lowest first). Null if orderbook fetch failed.",
+        ),
+      crossingCostPct: zod
+        .number()
+        .nullish()
+        .describe(
+          "Round-trip bid-ask crossing cost as sum of both venues' own-mid spreads (%). Null if orderbook missing.",
+        ),
+      feeCostPct: zod
+        .number()
+        .describe(
+          "Round-trip taker fee cost as % (4 legs total). Constant per deployment.",
+        ),
+      priceBasisPct: zod
+        .number()
+        .nullish()
+        .describe(
+          "Current price basis (BMEX mid − HL mid) as % of avg mid. Signed: positive = BMEX pricier.\nNull when pair is scale-mismatched (e.g. SPY ETF vs SP500 index) — the raw basis has no economic meaning there.\n",
+        ),
+      favorableBasisPct: zod
+        .number()
+        .nullish()
+        .describe(
+          "Basis in the trade's favor for the suggested direction (%). Positive means the current entry\nprice gap works for the trade; negative means it works against. Null for scale-mismatched pairs\nor NEUTRAL suggestions (no basis adjustment applied to totalCost in those cases).\n",
+        ),
+      totalCostPct: zod
+        .number()
+        .nullish()
+        .describe(
+          "Effective round-trip cost: crossingCostPct + feeCostPct − favorableBasisPct.\nAssumes the basis closes to zero at exit (correlated with funding normalization — the thesis of a funding-arb trade).\nCan be negative when favorable basis exceeds crossing+fees (net credit at entry). Null if orderbook missing.\n",
+        ),
+      netAPR1d: zod
+        .number()
+        .nullish()
+        .describe(
+          'Forward-looking net APR assuming a 1-day hold:\n|funding spread APR| − totalCostPct × 365. Pessimistic; useful as an \"actionable now\" filter.\n',
+        ),
+      netAPR7d: zod
+        .number()
+        .nullish()
+        .describe("Same as netAPR1d but amortized over a 7-day hold."),
+      netAPR30d: zod
+        .number()
+        .nullish()
+        .describe("Same as netAPR1d but amortized over a 30-day hold."),
+      breakevenHours: zod
+        .number()
+        .nullish()
+        .describe(
+          "Hours needed at the current funding spread to recover totalCostPct. Null if spread is zero or cost missing.",
+        ),
+    }),
+  ),
+  cachedAt: zod
+    .string()
+    .describe("ISO timestamp when cache was last populated"),
+});
+
+/**
  * Fetches fresh top-of-book + current funding rate directly from BitMEX & Hyperliquid,
 bypassing the cached DB snapshot. Does NOT re-fetch 30-day history. Intended for
 on-demand per-pair refresh from the dashboard. Rate-limited to 1 call per ~10s per pair
