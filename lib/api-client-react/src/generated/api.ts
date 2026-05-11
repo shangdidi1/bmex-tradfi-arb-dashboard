@@ -15,6 +15,7 @@ import type {
 
 import type {
   ArbDetailResponse,
+  ArbLiveResponse,
   ArbSummaryResponse,
   ErrorResponse,
   HealthStatus,
@@ -260,6 +261,98 @@ export function useGetArbDetail<
   },
 ): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getGetArbDetailQueryOptions(pairId, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Fetches fresh top-of-book + current funding rate directly from BitMEX & Hyperliquid,
+bypassing the cached DB snapshot. Does NOT re-fetch 30-day history. Intended for
+on-demand per-pair refresh from the dashboard. Rate-limited to 1 call per ~10s per pair
+per server instance.
+
+ * @summary Live refresh of orderbooks + current funding for one pair
+ */
+export const getGetArbLiveUrl = (pairId: string) => {
+  return `/api/arb/${pairId}/live`;
+};
+
+export const getArbLive = async (
+  pairId: string,
+  options?: RequestInit,
+): Promise<ArbLiveResponse> => {
+  return customFetch<ArbLiveResponse>(getGetArbLiveUrl(pairId), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetArbLiveQueryKey = (pairId: string) => {
+  return [`/api/arb/${pairId}/live`] as const;
+};
+
+export const getGetArbLiveQueryOptions = <
+  TData = Awaited<ReturnType<typeof getArbLive>>,
+  TError = ErrorType<ErrorResponse>,
+>(
+  pairId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getArbLive>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetArbLiveQueryKey(pairId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getArbLive>>> = ({
+    signal,
+  }) => getArbLive(pairId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!pairId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getArbLive>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetArbLiveQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getArbLive>>
+>;
+export type GetArbLiveQueryError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Live refresh of orderbooks + current funding for one pair
+ */
+
+export function useGetArbLive<
+  TData = Awaited<ReturnType<typeof getArbLive>>,
+  TError = ErrorType<ErrorResponse>,
+>(
+  pairId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getArbLive>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetArbLiveQueryOptions(pairId, options);
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;

@@ -67,6 +67,42 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /arb/{pairId}/live:
+    get:
+      operationId: getArbLive
+      tags: [arb]
+      summary: Live refresh of orderbooks + current funding for one pair
+      description: |
+        Fetches fresh top-of-book + current funding rate directly from BitMEX & Hyperliquid,
+        bypassing the cached DB snapshot. Does NOT re-fetch 30-day history. Intended for
+        on-demand per-pair refresh from the dashboard. Rate-limited to 1 call per ~10s per pair
+        per server instance.
+      parameters:
+        - name: pairId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Fresh live snapshot for the pair
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArbLiveResponse"
+        "404":
+          description: Pair not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          description: Rate limited — try again in a few seconds
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
 components:
   schemas:
     HealthStatus:
@@ -142,6 +178,103 @@ components:
         lastUpdated:
           type: string
           description: ISO timestamp of last data refresh
+        bmexBid:
+          type: number
+          nullable: true
+          description: BitMEX best bid price; null if orderbook fetch failed
+        bmexAsk:
+          type: number
+          nullable: true
+          description: BitMEX best ask price; null if orderbook fetch failed
+        hlBid:
+          type: number
+          nullable: true
+          description: Hyperliquid best bid price; null if orderbook fetch failed
+        hlAsk:
+          type: number
+          nullable: true
+          description: Hyperliquid best ask price; null if orderbook fetch failed
+        bmexBidSize:
+          type: number
+          nullable: true
+          description: BitMEX size at best bid, in base-coin units. Multiply by bmexBid for USD notional. Null if orderbook fetch failed.
+        bmexAskSize:
+          type: number
+          nullable: true
+          description: BitMEX size at best ask, in base-coin units. Multiply by bmexAsk for USD notional. Null if orderbook fetch failed.
+        hlBidSize:
+          type: number
+          nullable: true
+          description: Hyperliquid size at best bid, in base coin units. Null if orderbook fetch failed.
+        hlAskSize:
+          type: number
+          nullable: true
+          description: Hyperliquid size at best ask, in base coin units. Null if orderbook fetch failed.
+        bmexBids:
+          type: array
+          nullable: true
+          items: { $ref: "#/components/schemas/BookLevel" }
+          description: BitMEX top-5 bid levels (highest first). Null if orderbook fetch failed.
+        bmexAsks:
+          type: array
+          nullable: true
+          items: { $ref: "#/components/schemas/BookLevel" }
+          description: BitMEX top-5 ask levels (lowest first). Null if orderbook fetch failed.
+        hlBids:
+          type: array
+          nullable: true
+          items: { $ref: "#/components/schemas/BookLevel" }
+          description: Hyperliquid top-5 bid levels (highest first). Null if orderbook fetch failed.
+        hlAsks:
+          type: array
+          nullable: true
+          items: { $ref: "#/components/schemas/BookLevel" }
+          description: Hyperliquid top-5 ask levels (lowest first). Null if orderbook fetch failed.
+        crossingCostPct:
+          type: number
+          nullable: true
+          description: Round-trip bid-ask crossing cost as sum of both venues' own-mid spreads (%). Null if orderbook missing.
+        feeCostPct:
+          type: number
+          description: Round-trip taker fee cost as % (4 legs total). Constant per deployment.
+        priceBasisPct:
+          type: number
+          nullable: true
+          description: |
+            Current price basis (BMEX mid − HL mid) as % of avg mid. Signed: positive = BMEX pricier.
+            Null when pair is scale-mismatched (e.g. SPY ETF vs SP500 index) — the raw basis has no economic meaning there.
+        favorableBasisPct:
+          type: number
+          nullable: true
+          description: |
+            Basis in the trade's favor for the suggested direction (%). Positive means the current entry
+            price gap works for the trade; negative means it works against. Null for scale-mismatched pairs
+            or NEUTRAL suggestions (no basis adjustment applied to totalCost in those cases).
+        totalCostPct:
+          type: number
+          nullable: true
+          description: |
+            Effective round-trip cost: crossingCostPct + feeCostPct − favorableBasisPct.
+            Assumes the basis closes to zero at exit (correlated with funding normalization — the thesis of a funding-arb trade).
+            Can be negative when favorable basis exceeds crossing+fees (net credit at entry). Null if orderbook missing.
+        netAPR1d:
+          type: number
+          nullable: true
+          description: |
+            Forward-looking net APR assuming a 1-day hold:
+            |funding spread APR| − totalCostPct × 365. Pessimistic; useful as an "actionable now" filter.
+        netAPR7d:
+          type: number
+          nullable: true
+          description: Same as netAPR1d but amortized over a 7-day hold.
+        netAPR30d:
+          type: number
+          nullable: true
+          description: Same as netAPR1d but amortized over a 30-day hold.
+        breakevenHours:
+          type: number
+          nullable: true
+          description: Hours needed at the current funding spread to recover totalCostPct. Null if spread is zero or cost missing.
       required:
         - pairId
         - name
@@ -162,6 +295,7 @@ components:
         - annYield30d
         - suggestion
         - lastUpdated
+        - feeCostPct
 
     ArbSummaryResponse:
       type: object
@@ -216,3 +350,60 @@ components:
       required:
         - summary
         - timeSeries
+
+    BookLevel:
+      type: object
+      properties:
+        px:
+          type: number
+          description: Price at this level
+        size:
+          type: number
+          description: Size at this level in base-coin units
+      required:
+        - px
+        - size
+
+    ArbLiveResponse:
+      type: object
+      description: Live on-demand snapshot (orderbooks + current funding) for one pair. Not persisted.
+      properties:
+        pairId:
+          type: string
+        name:
+          type: string
+        bitmexSymbol:
+          type: string
+        hlSymbol:
+          type: string
+        bitmexCurrentAPR:
+          type: number
+        hlCurrentAPR:
+          type: number
+        bmexBids:
+          type: array
+          nullable: true
+          items: { $ref: "#/components/schemas/BookLevel" }
+        bmexAsks:
+          type: array
+          nullable: true
+          items: { $ref: "#/components/schemas/BookLevel" }
+        hlBids:
+          type: array
+          nullable: true
+          items: { $ref: "#/components/schemas/BookLevel" }
+        hlAsks:
+          type: array
+          nullable: true
+          items: { $ref: "#/components/schemas/BookLevel" }
+        fetchedAt:
+          type: string
+          description: ISO timestamp when the live fetch completed
+      required:
+        - pairId
+        - name
+        - bitmexSymbol
+        - hlSymbol
+        - bitmexCurrentAPR
+        - hlCurrentAPR
+        - fetchedAt

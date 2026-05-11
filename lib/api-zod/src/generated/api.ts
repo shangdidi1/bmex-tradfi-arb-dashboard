@@ -77,6 +77,147 @@ export const GetArbSummaryResponse = zod.object({
         .enum(["LONG_BITMEX_SHORT_HL", "LONG_HL_SHORT_BITMEX", "NEUTRAL"])
         .describe("Trade direction suggestion"),
       lastUpdated: zod.string().describe("ISO timestamp of last data refresh"),
+      bmexBid: zod
+        .number()
+        .nullish()
+        .describe("BitMEX best bid price; null if orderbook fetch failed"),
+      bmexAsk: zod
+        .number()
+        .nullish()
+        .describe("BitMEX best ask price; null if orderbook fetch failed"),
+      hlBid: zod
+        .number()
+        .nullish()
+        .describe("Hyperliquid best bid price; null if orderbook fetch failed"),
+      hlAsk: zod
+        .number()
+        .nullish()
+        .describe("Hyperliquid best ask price; null if orderbook fetch failed"),
+      bmexBidSize: zod
+        .number()
+        .nullish()
+        .describe(
+          "BitMEX size at best bid, in base-coin units. Multiply by bmexBid for USD notional. Null if orderbook fetch failed.",
+        ),
+      bmexAskSize: zod
+        .number()
+        .nullish()
+        .describe(
+          "BitMEX size at best ask, in base-coin units. Multiply by bmexAsk for USD notional. Null if orderbook fetch failed.",
+        ),
+      hlBidSize: zod
+        .number()
+        .nullish()
+        .describe(
+          "Hyperliquid size at best bid, in base coin units. Null if orderbook fetch failed.",
+        ),
+      hlAskSize: zod
+        .number()
+        .nullish()
+        .describe(
+          "Hyperliquid size at best ask, in base coin units. Null if orderbook fetch failed.",
+        ),
+      bmexBids: zod
+        .array(
+          zod.object({
+            px: zod.number().describe("Price at this level"),
+            size: zod
+              .number()
+              .describe("Size at this level in base-coin units"),
+          }),
+        )
+        .nullish()
+        .describe(
+          "BitMEX top-5 bid levels (highest first). Null if orderbook fetch failed.",
+        ),
+      bmexAsks: zod
+        .array(
+          zod.object({
+            px: zod.number().describe("Price at this level"),
+            size: zod
+              .number()
+              .describe("Size at this level in base-coin units"),
+          }),
+        )
+        .nullish()
+        .describe(
+          "BitMEX top-5 ask levels (lowest first). Null if orderbook fetch failed.",
+        ),
+      hlBids: zod
+        .array(
+          zod.object({
+            px: zod.number().describe("Price at this level"),
+            size: zod
+              .number()
+              .describe("Size at this level in base-coin units"),
+          }),
+        )
+        .nullish()
+        .describe(
+          "Hyperliquid top-5 bid levels (highest first). Null if orderbook fetch failed.",
+        ),
+      hlAsks: zod
+        .array(
+          zod.object({
+            px: zod.number().describe("Price at this level"),
+            size: zod
+              .number()
+              .describe("Size at this level in base-coin units"),
+          }),
+        )
+        .nullish()
+        .describe(
+          "Hyperliquid top-5 ask levels (lowest first). Null if orderbook fetch failed.",
+        ),
+      crossingCostPct: zod
+        .number()
+        .nullish()
+        .describe(
+          "Round-trip bid-ask crossing cost as sum of both venues' own-mid spreads (%). Null if orderbook missing.",
+        ),
+      feeCostPct: zod
+        .number()
+        .describe(
+          "Round-trip taker fee cost as % (4 legs total). Constant per deployment.",
+        ),
+      priceBasisPct: zod
+        .number()
+        .nullish()
+        .describe(
+          "Current price basis (BMEX mid − HL mid) as % of avg mid. Signed: positive = BMEX pricier.\nNull when pair is scale-mismatched (e.g. SPY ETF vs SP500 index) — the raw basis has no economic meaning there.\n",
+        ),
+      favorableBasisPct: zod
+        .number()
+        .nullish()
+        .describe(
+          "Basis in the trade's favor for the suggested direction (%). Positive means the current entry\nprice gap works for the trade; negative means it works against. Null for scale-mismatched pairs\nor NEUTRAL suggestions (no basis adjustment applied to totalCost in those cases).\n",
+        ),
+      totalCostPct: zod
+        .number()
+        .nullish()
+        .describe(
+          "Effective round-trip cost: crossingCostPct + feeCostPct − favorableBasisPct.\nAssumes the basis closes to zero at exit (correlated with funding normalization — the thesis of a funding-arb trade).\nCan be negative when favorable basis exceeds crossing+fees (net credit at entry). Null if orderbook missing.\n",
+        ),
+      netAPR1d: zod
+        .number()
+        .nullish()
+        .describe(
+          'Forward-looking net APR assuming a 1-day hold:\n|funding spread APR| − totalCostPct × 365. Pessimistic; useful as an \"actionable now\" filter.\n',
+        ),
+      netAPR7d: zod
+        .number()
+        .nullish()
+        .describe("Same as netAPR1d but amortized over a 7-day hold."),
+      netAPR30d: zod
+        .number()
+        .nullish()
+        .describe("Same as netAPR1d but amortized over a 30-day hold."),
+      breakevenHours: zod
+        .number()
+        .nullish()
+        .describe(
+          "Hours needed at the current funding spread to recover totalCostPct. Null if spread is zero or cost missing.",
+        ),
     }),
   ),
   cachedAt: zod
@@ -148,6 +289,139 @@ export const GetArbDetailResponse = zod.object({
       .enum(["LONG_BITMEX_SHORT_HL", "LONG_HL_SHORT_BITMEX", "NEUTRAL"])
       .describe("Trade direction suggestion"),
     lastUpdated: zod.string().describe("ISO timestamp of last data refresh"),
+    bmexBid: zod
+      .number()
+      .nullish()
+      .describe("BitMEX best bid price; null if orderbook fetch failed"),
+    bmexAsk: zod
+      .number()
+      .nullish()
+      .describe("BitMEX best ask price; null if orderbook fetch failed"),
+    hlBid: zod
+      .number()
+      .nullish()
+      .describe("Hyperliquid best bid price; null if orderbook fetch failed"),
+    hlAsk: zod
+      .number()
+      .nullish()
+      .describe("Hyperliquid best ask price; null if orderbook fetch failed"),
+    bmexBidSize: zod
+      .number()
+      .nullish()
+      .describe(
+        "BitMEX size at best bid, in base-coin units. Multiply by bmexBid for USD notional. Null if orderbook fetch failed.",
+      ),
+    bmexAskSize: zod
+      .number()
+      .nullish()
+      .describe(
+        "BitMEX size at best ask, in base-coin units. Multiply by bmexAsk for USD notional. Null if orderbook fetch failed.",
+      ),
+    hlBidSize: zod
+      .number()
+      .nullish()
+      .describe(
+        "Hyperliquid size at best bid, in base coin units. Null if orderbook fetch failed.",
+      ),
+    hlAskSize: zod
+      .number()
+      .nullish()
+      .describe(
+        "Hyperliquid size at best ask, in base coin units. Null if orderbook fetch failed.",
+      ),
+    bmexBids: zod
+      .array(
+        zod.object({
+          px: zod.number().describe("Price at this level"),
+          size: zod.number().describe("Size at this level in base-coin units"),
+        }),
+      )
+      .nullish()
+      .describe(
+        "BitMEX top-5 bid levels (highest first). Null if orderbook fetch failed.",
+      ),
+    bmexAsks: zod
+      .array(
+        zod.object({
+          px: zod.number().describe("Price at this level"),
+          size: zod.number().describe("Size at this level in base-coin units"),
+        }),
+      )
+      .nullish()
+      .describe(
+        "BitMEX top-5 ask levels (lowest first). Null if orderbook fetch failed.",
+      ),
+    hlBids: zod
+      .array(
+        zod.object({
+          px: zod.number().describe("Price at this level"),
+          size: zod.number().describe("Size at this level in base-coin units"),
+        }),
+      )
+      .nullish()
+      .describe(
+        "Hyperliquid top-5 bid levels (highest first). Null if orderbook fetch failed.",
+      ),
+    hlAsks: zod
+      .array(
+        zod.object({
+          px: zod.number().describe("Price at this level"),
+          size: zod.number().describe("Size at this level in base-coin units"),
+        }),
+      )
+      .nullish()
+      .describe(
+        "Hyperliquid top-5 ask levels (lowest first). Null if orderbook fetch failed.",
+      ),
+    crossingCostPct: zod
+      .number()
+      .nullish()
+      .describe(
+        "Round-trip bid-ask crossing cost as sum of both venues' own-mid spreads (%). Null if orderbook missing.",
+      ),
+    feeCostPct: zod
+      .number()
+      .describe(
+        "Round-trip taker fee cost as % (4 legs total). Constant per deployment.",
+      ),
+    priceBasisPct: zod
+      .number()
+      .nullish()
+      .describe(
+        "Current price basis (BMEX mid − HL mid) as % of avg mid. Signed: positive = BMEX pricier.\nNull when pair is scale-mismatched (e.g. SPY ETF vs SP500 index) — the raw basis has no economic meaning there.\n",
+      ),
+    favorableBasisPct: zod
+      .number()
+      .nullish()
+      .describe(
+        "Basis in the trade's favor for the suggested direction (%). Positive means the current entry\nprice gap works for the trade; negative means it works against. Null for scale-mismatched pairs\nor NEUTRAL suggestions (no basis adjustment applied to totalCost in those cases).\n",
+      ),
+    totalCostPct: zod
+      .number()
+      .nullish()
+      .describe(
+        "Effective round-trip cost: crossingCostPct + feeCostPct − favorableBasisPct.\nAssumes the basis closes to zero at exit (correlated with funding normalization — the thesis of a funding-arb trade).\nCan be negative when favorable basis exceeds crossing+fees (net credit at entry). Null if orderbook missing.\n",
+      ),
+    netAPR1d: zod
+      .number()
+      .nullish()
+      .describe(
+        'Forward-looking net APR assuming a 1-day hold:\n|funding spread APR| − totalCostPct × 365. Pessimistic; useful as an \"actionable now\" filter.\n',
+      ),
+    netAPR7d: zod
+      .number()
+      .nullish()
+      .describe("Same as netAPR1d but amortized over a 7-day hold."),
+    netAPR30d: zod
+      .number()
+      .nullish()
+      .describe("Same as netAPR1d but amortized over a 30-day hold."),
+    breakevenHours: zod
+      .number()
+      .nullish()
+      .describe(
+        "Hours needed at the current funding spread to recover totalCostPct. Null if spread is zero or cost missing.",
+      ),
   }),
   timeSeries: zod.array(
     zod.object({
@@ -161,3 +435,63 @@ export const GetArbDetailResponse = zod.object({
     }),
   ),
 });
+
+/**
+ * Fetches fresh top-of-book + current funding rate directly from BitMEX & Hyperliquid,
+bypassing the cached DB snapshot. Does NOT re-fetch 30-day history. Intended for
+on-demand per-pair refresh from the dashboard. Rate-limited to 1 call per ~10s per pair
+per server instance.
+
+ * @summary Live refresh of orderbooks + current funding for one pair
+ */
+export const GetArbLiveParams = zod.object({
+  pairId: zod.coerce.string(),
+});
+
+export const GetArbLiveResponse = zod
+  .object({
+    pairId: zod.string(),
+    name: zod.string(),
+    bitmexSymbol: zod.string(),
+    hlSymbol: zod.string(),
+    bitmexCurrentAPR: zod.number(),
+    hlCurrentAPR: zod.number(),
+    bmexBids: zod
+      .array(
+        zod.object({
+          px: zod.number().describe("Price at this level"),
+          size: zod.number().describe("Size at this level in base-coin units"),
+        }),
+      )
+      .nullish(),
+    bmexAsks: zod
+      .array(
+        zod.object({
+          px: zod.number().describe("Price at this level"),
+          size: zod.number().describe("Size at this level in base-coin units"),
+        }),
+      )
+      .nullish(),
+    hlBids: zod
+      .array(
+        zod.object({
+          px: zod.number().describe("Price at this level"),
+          size: zod.number().describe("Size at this level in base-coin units"),
+        }),
+      )
+      .nullish(),
+    hlAsks: zod
+      .array(
+        zod.object({
+          px: zod.number().describe("Price at this level"),
+          size: zod.number().describe("Size at this level in base-coin units"),
+        }),
+      )
+      .nullish(),
+    fetchedAt: zod
+      .string()
+      .describe("ISO timestamp when the live fetch completed"),
+  })
+  .describe(
+    "Live on-demand snapshot (orderbooks + current funding) for one pair. Not persisted.",
+  );

@@ -11,5 +11,11 @@
       "src": "/(.*)",
       "dest": "src/vercel.ts"
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/arb/refresh",
+      "schedule": "*/10 * * * *"
+    }
   ]
 }

@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
-import { useGetArbSummary, useGetArbDetail, getGetArbSummaryQueryKey, getGetArbDetailQueryKey } from "@workspace/api-client-react";
-import type { ArbPairSummary } from "@workspace/api-client-react";
+import { useGetArbSummary, useGetArbDetail, getArbLive, getGetArbSummaryQueryKey, getGetArbDetailQueryKey } from "@workspace/api-client-react";
+import type { ArbPairSummary, ArbLiveResponse, BookLevel } from "@workspace/api-client-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area, ReferenceLine
 } from "recharts";
@@ -29,6 +29,207 @@ const CHART_COLORS = {
 
 function formatPercent(value: number): string {
   return new Intl.NumberFormat("en-US", { style: "percent", minimumFractionDigits: 3, maximumFractionDigits: 3 }).format(value / 100);
+}
+
+function formatPercent2(value: number): string {
+  return new Intl.NumberFormat("en-US", { style: "percent", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value / 100);
+}
+
+function formatBreakeven(hours: number | null | undefined): string {
+  if (hours === null || hours === undefined || !isFinite(hours)) return "∞";
+  if (hours < 1) return `${(hours * 60).toFixed(0)}m`;
+  if (hours < 48) return `${hours.toFixed(1)}h`;
+  return `${(hours / 24).toFixed(1)}d`;
+}
+
+function netEdgeColor(v: number | null | undefined): string {
+  if (v === null || v === undefined) return "text-gray-500";
+  if (v > 30) return "text-green-400";
+  if (v > 0) return "text-green-300";
+  if (v > -20) return "text-yellow-400";
+  return "text-red-400";
+}
+
+function formatUsdCompact(v: number): string {
+  if (!isFinite(v) || v <= 0) return "—";
+  if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(2)}M`;
+  if (v >= 1_000) return `$${(v / 1_000).toFixed(1)}K`;
+  return `$${Math.round(v).toLocaleString()}`;
+}
+
+function OrderbookPanel({
+  venue, symbol, bids, asks, accentColor, priceDecimals = 4,
+}: {
+  venue: string;
+  symbol: string;
+  bids: BookLevel[];
+  asks: BookLevel[];
+  accentColor: string;
+  priceDecimals?: number;
+}) {
+  // Cumulative totals in USD notional, summed from best outward (closest-to-spread first).
+  const bidsWithTotal = useMemo(() => {
+    let cum = 0;
+    return bids.map((l) => { cum += l.px * l.size; return { ...l, totalUsd: cum, sizeUsd: l.px * l.size }; });
+  }, [bids]);
+  const asksWithTotal = useMemo(() => {
+    let cum = 0;
+    return asks.map((l) => { cum += l.px * l.size; return { ...l, totalUsd: cum, sizeUsd: l.px * l.size }; });
+  }, [asks]);
+
+  // Max USD size on either side — used to scale the depth bar width.
+  const maxSizeUsd = useMemo(() => {
+    const all = [...bidsWithTotal, ...asksWithTotal].map((l) => l.sizeUsd);
+    return all.length ? Math.max(...all) : 1;
+  }, [bidsWithTotal, asksWithTotal]);
+
+  const fmtPrice = (px: number) => px.toLocaleString(undefined, { maximumFractionDigits: priceDecimals });
+  const bestAsk = asks[0]?.px ?? 0;
+  const bestBid = bids[0]?.px ?? 0;
+  const spreadPct = (bestAsk > 0 && bestBid > 0) ? ((bestAsk - bestBid) / ((bestAsk + bestBid) / 2)) * 100 : 0;
+
+  // Render asks top-down with lowest (best) at the bottom, just above the spread line.
+  const asksDisplay = [...asksWithTotal].reverse();
+
+  const Row = ({ px, sizeUsd, totalUsd, isBid }: { px: number; sizeUsd: number; totalUsd: number; isBid: boolean }) => {
+    const barPct = Math.min(100, (sizeUsd / maxSizeUsd) * 100);
+    const barColor = isBid ? "rgba(34,197,94,0.12)" : "rgba(239,68,68,0.12)";
+    const priceColor = isBid ? "text-green-400" : "text-red-400";
+    return (
+      <div className="relative grid grid-cols-3 gap-2 py-0.5 px-1 text-xs font-mono">
+        <div className="absolute inset-y-0 right-0 pointer-events-none" style={{ width: `${barPct}%`, background: barColor }} />
+        <span className={`relative z-10 ${priceColor}`}>{fmtPrice(px)}</span>
+        <span className="relative z-10 text-right text-gray-300">{formatUsdCompact(sizeUsd)}</span>
+        <span className="relative z-10 text-right text-gray-500">{formatUsdCompact(totalUsd)}</span>
+      </div>
+    );
+  };
+
+  return (
+    <div className="rounded-lg border p-3" style={{ borderColor: `${accentColor}33`, background: `${accentColor}08` }}>
+      <p className="text-xs font-medium uppercase tracking-wider mb-2" style={{ color: accentColor }}>
+        {venue} {symbol}
+      </p>
+      <div className="grid grid-cols-3 gap-2 text-[10px] text-gray-500 px-1 pb-1 border-b border-gray-800">
+        <span>Price</span>
+        <span className="text-right">Size (USD)</span>
+        <span className="text-right">Total (USD)</span>
+      </div>
+      <div className="mt-1">
+        {asksDisplay.map((l, i) => (
+          <Row key={`a${i}`} px={l.px} sizeUsd={l.sizeUsd} totalUsd={l.totalUsd} isBid={false} />
+        ))}
+      </div>
+      <div className="flex items-center justify-between my-1 px-1 py-1 border-y border-gray-800 text-[11px] font-mono">
+        <span className="text-gray-400">Spread</span>
+        <span className="text-gray-200">{(bestAsk - bestBid).toLocaleString(undefined, { maximumFractionDigits: priceDecimals })}</span>
+        <span className="text-gray-400">{formatPercent2(spreadPct)}</span>
+      </div>
+      <div>
+        {bidsWithTotal.map((l, i) => (
+          <Row key={`b${i}`} px={l.px} sizeUsd={l.sizeUsd} totalUsd={l.totalUsd} isBid={true} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function formatTimeAgo(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const ms = Date.now() - new Date(iso).getTime();
+  if (!isFinite(ms) || ms < 0) return "";
+  const mins = Math.floor(ms / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
+function directionLabel(s: string): string {
+  if (s === "LONG_BITMEX_SHORT_HL") return "LONG BITMEX / SHORT HL";
+  if (s === "LONG_HL_SHORT_BITMEX") return "LONG HL / SHORT BITMEX";
+  return "NEUTRAL";
+}
+
+function TopPickCard({
+  title, subtitle, pair, loading, onClick, highlight, badge, emptyCopy,
+}: {
+  title: string;
+  subtitle: string;
+  pair: ArbPairSummary | null;
+  loading: boolean;
+  onClick: (pairId: string) => void;
+  highlight?: "edge" | "consistency";
+  badge?: string;
+  emptyCopy: string;
+}) {
+  if (loading && !pair) {
+    return (
+      <Card className="bg-[#1a1f2e] border-gray-800">
+        <CardContent className="p-6">
+          <p className="text-sm text-gray-400">{title}</p>
+          <Skeleton className="h-8 w-48 mt-2 bg-gray-700" />
+          <Skeleton className="h-4 w-32 mt-2 bg-gray-700" />
+        </CardContent>
+      </Card>
+    );
+  }
+  if (!pair) {
+    return (
+      <Card className="bg-[#1a1f2e] border-gray-800">
+        <CardContent className="p-6">
+          <p className="text-sm text-gray-400">{title}</p>
+          <p className="text-sm text-gray-500 mt-3 italic">{emptyCopy}</p>
+        </CardContent>
+      </Card>
+    );
+  }
+  const isEdge = highlight !== "consistency";
+  const primaryValue = isEdge ? pair.netAPR7d : pair.consistency14d;
+  const primaryLabel = isEdge ? "Net 7d APR" : "14d hit rate";
+  return (
+    <Card
+      className="bg-[#1a1f2e] border-gray-800 cursor-pointer hover:bg-[#22283a] transition-colors"
+      onClick={() => onClick(pair.pairId)}
+    >
+      <CardContent className="p-6">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <p className="text-sm text-gray-400">{title}</p>
+              {badge && (
+                <span className="text-[10px] font-semibold uppercase tracking-wider bg-green-500/20 text-green-400 border border-green-500/40 rounded px-1.5 py-0.5">
+                  {badge}
+                </span>
+              )}
+            </div>
+            <p className="text-xl font-bold mt-1 truncate text-gray-100">{pair.name}</p>
+            <p className="text-[11px] text-gray-500 mt-0.5 truncate">{directionLabel(pair.suggestion)}</p>
+          </div>
+          <div className="text-right shrink-0">
+            <p className={`text-2xl font-bold font-mono ${isEdge ? netEdgeColor(primaryValue) : "text-gray-100"}`}>
+              {isEdge
+                ? (primaryValue === null || primaryValue === undefined ? "—" : formatPercent(primaryValue))
+                : `${(primaryValue ?? 0).toFixed(1)}%`}
+            </p>
+            <p className="text-[11px] text-gray-500 mt-0.5">{primaryLabel}</p>
+          </div>
+        </div>
+        <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-800 text-xs text-gray-400">
+          <span className="text-[11px] text-gray-500">{subtitle}</span>
+          <span className="flex items-center gap-3 font-mono">
+            {isEdge ? (
+              <span>hit {(pair.consistency14d ?? 0).toFixed(0)}%</span>
+            ) : (
+              <span className={netEdgeColor(pair.netAPR7d)}>{pair.netAPR7d === null || pair.netAPR7d === undefined ? "—" : formatPercent(pair.netAPR7d)}</span>
+            )}
+            <span>b/e {formatBreakeven(pair.breakevenHours)}</span>
+          </span>
+        </div>
+      </CardContent>
+    </Card>
+  );
 }
 
 function formatDate(dateStr: string, fmt = "MMM d, HH:mm"): string {
@@ -91,7 +292,7 @@ export default function Dashboard() {
   const [selectedPairId, setSelectedPairId] = useState<string | null>(null);
 
   const [sorting, setSorting] = useState<SortingState>([
-    { id: "annYield14d", desc: true }
+    { id: "netAPR7d", desc: true }
   ]);
 
   const columns = useMemo<ColumnDef<ArbPairSummary>[]>(() => [
@@ -120,28 +321,62 @@ export default function Dashboard() {
       cell: ({ row }) => <span className="font-mono text-blue-400">{formatPercent(row.original.hlCurrentAPR)}</span>
     },
     {
-      accessorKey: "priceSpreadPct",
-      header: "Price Basis %",
-      cell: ({ row }) => <span className="font-mono">{formatPercent(row.original.priceSpreadPct)}</span>
+      accessorKey: "totalCostPct",
+      header: "Entry Cost",
+      cell: ({ row }) => {
+        const r = row.original;
+        if (r.totalCostPct === null || r.totalCostPct === undefined) {
+          return <span className="font-mono text-gray-500">—</span>;
+        }
+        const isPaidEntry = r.totalCostPct < 0;
+        const mainColor = isPaidEntry ? "text-green-400" : "text-gray-100";
+        const basis = r.favorableBasisPct;
+        let breakdown: string;
+        if (basis !== null && basis !== undefined) {
+          const basisStr = basis >= 0
+            ? `− basis ${formatPercent2(basis)}`
+            : `+ basis ${formatPercent2(-basis)}`;
+          breakdown = `spread ${formatPercent2(r.crossingCostPct ?? 0)} + fees ${formatPercent2(r.feeCostPct)} ${basisStr}`;
+        } else {
+          breakdown = `spread ${formatPercent2(r.crossingCostPct ?? 0)} + fees ${formatPercent2(r.feeCostPct)}`;
+        }
+        return (
+          <div className="space-y-0.5 font-mono text-sm">
+            <div className={`font-semibold ${mainColor}`}>
+              {isPaidEntry ? `−${formatPercent2(-r.totalCostPct)}` : formatPercent2(r.totalCostPct)}
+            </div>
+            <div className="text-[10px] text-gray-500">{breakdown}</div>
+            <div className="text-[11px] text-gray-400">
+              {isPaidEntry ? "paid to enter" : `b/e ${formatBreakeven(r.breakevenHours)}`}
+            </div>
+          </div>
+        );
+      }
     },
     {
-      accessorKey: "annYield14d",
-      header: "Ann. Yield",
+      accessorKey: "netAPR7d",
+      header: "Net APR",
       cell: ({ row }) => {
         const r = row.original;
         return (
           <div className="space-y-0.5 font-mono text-sm">
             <div className="flex items-center gap-1.5">
-              <span className="text-[10px] text-gray-500 w-6">7d</span>
-              <span className="text-green-400">{formatPercent(r.annYield7d ?? 0)}</span>
+              <span className="text-[10px] text-gray-500 w-6">1d</span>
+              <span className={netEdgeColor(r.netAPR1d)}>
+                {r.netAPR1d === null || r.netAPR1d === undefined ? "—" : formatPercent(r.netAPR1d)}
+              </span>
             </div>
             <div className="flex items-center gap-1.5">
-              <span className="text-[10px] text-gray-400 w-6">14d</span>
-              <span className="text-green-300 font-semibold">{formatPercent(r.annYield14d ?? 0)}</span>
+              <span className="text-[10px] text-gray-400 w-6">7d</span>
+              <span className={`font-semibold ${netEdgeColor(r.netAPR7d)}`}>
+                {r.netAPR7d === null || r.netAPR7d === undefined ? "—" : formatPercent(r.netAPR7d)}
+              </span>
             </div>
             <div className="flex items-center gap-1.5">
               <span className="text-[10px] text-gray-500 w-6">30d</span>
-              <span className="text-green-400">{formatPercent(r.annYield30d ?? 0)}</span>
+              <span className={netEdgeColor(r.netAPR30d)}>
+                {r.netAPR30d === null || r.netAPR30d === undefined ? "—" : formatPercent(r.netAPR30d)}
+              </span>
             </div>
           </div>
         );
@@ -149,7 +384,7 @@ export default function Dashboard() {
     },
     {
       accessorKey: "consistency14d",
-      header: "Consistency",
+      header: "Hit Rate",
       cell: ({ row }) => {
         const r = row.original;
         return (
@@ -174,13 +409,28 @@ export default function Dashboard() {
       accessorKey: "suggestion",
       header: "Suggestion",
       cell: ({ row }) => {
-        const sugg = row.original.suggestion;
+        const r = row.original;
+        const sugg = r.suggestion;
+        const flipped = sugg !== "NEUTRAL" && (r.consistency14d ?? 50) < 50;
+        let badge;
         if (sugg === "LONG_BITMEX_SHORT_HL") {
-          return <Badge className="bg-green-500/20 text-green-400 hover:bg-green-500/30 border-green-500/50">LONG BITMEX / SHORT HL</Badge>;
+          badge = <Badge className="bg-green-500/20 text-green-400 hover:bg-green-500/30 border-green-500/50">LONG BITMEX / SHORT HL</Badge>;
         } else if (sugg === "LONG_HL_SHORT_BITMEX") {
-          return <Badge className="bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 border-yellow-500/50">LONG HL / SHORT BITMEX</Badge>;
+          badge = <Badge className="bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 border-yellow-500/50">LONG HL / SHORT BITMEX</Badge>;
+        } else {
+          badge = <Badge variant="outline" className="text-gray-400">NEUTRAL</Badge>;
         }
-        return <Badge variant="outline" className="text-gray-400">NEUTRAL</Badge>;
+        return (
+          <div className="space-y-1">
+            {badge}
+            {flipped && (
+              <div className="text-[10px] text-amber-400 flex items-center gap-1">
+                <AlertTriangle className="w-3 h-3" />
+                recently flipped
+              </div>
+            )}
+          </div>
+        );
       }
     }
   ], []);
@@ -194,7 +444,23 @@ export default function Dashboard() {
     getSortedRowModel: getSortedRowModel(),
   });
 
-  const highYieldPairs = summaryData.filter(d => (d.annYield7d ?? 0) > 20).length;
+  const actionable = summaryData.filter(d => (d.netAPR7d ?? -Infinity) > 0);
+  const actionablePairs = actionable.length;
+
+  // Top Pick ranking: pairs with negative entry cost first (basis covers costs — pure arb,
+  // you're paid to enter). Among those, pick the one with highest 7d net APR.
+  // Otherwise fall back to highest net APR among tradeable.
+  const paidEntryPairs = actionable.filter(d => (d.totalCostPct ?? 0) < 0);
+  const topPickPair = paidEntryPairs.length
+    ? paidEntryPairs.reduce((a, b) => ((b.netAPR7d ?? 0) > (a.netAPR7d ?? 0) ? b : a))
+    : actionable.length
+      ? actionable.reduce((a, b) => ((b.netAPR7d ?? 0) > (a.netAPR7d ?? 0) ? b : a))
+      : null;
+  const topPickIsPaidEntry = !!topPickPair && (topPickPair.totalCostPct ?? 0) < 0;
+
+  const mostReliablePair = actionable.length
+    ? actionable.reduce((a, b) => ((b.consistency14d ?? 0) > (a.consistency14d ?? 0) ? b : a))
+    : null;
   const avgSpread = summaryData.length ? summaryData.reduce((acc, d) => acc + d.fundingSpread, 0) / summaryData.length : 0;
   const avgConsistency = summaryData.length ? summaryData.reduce((acc, d) => acc + d.consistencyScore, 0) / summaryData.length : 0;
 
@@ -232,14 +498,15 @@ export default function Dashboard() {
           </div>
           <div className="flex flex-col items-end gap-2 pt-2">
             <div className="flex items-center gap-3">
-              <span className="text-xs text-gray-500">Updates every 5 min</span>
+              <span className="text-xs text-gray-500">Data refreshed every 10 min</span>
               <button
                 onClick={() => refetch()}
                 disabled={loading}
                 className="flex items-center gap-1 px-3 py-1.5 h-[32px] rounded border border-gray-700 bg-gray-800 text-sm hover:bg-gray-700 transition-colors disabled:opacity-50 text-gray-300"
+                title="Re-reads the server cache. Fresh data comes from the 10-min cron — for a live snapshot, open a pair and use 'Refresh this pair'."
               >
                 <RefreshCw className={`w-4 h-4 ${isSpinning ? "animate-spin" : ""}`} />
-                Refresh
+                Refresh cache
               </button>
             </div>
             {lastRefreshed && <p className="text-[12px] text-gray-500">Last update: {lastRefreshed}</p>}
@@ -250,46 +517,33 @@ export default function Dashboard() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <Card className="bg-[#1a1f2e] border-gray-800">
             <CardContent className="p-6">
-              <p className="text-sm text-gray-400">High-Yield Opportunities (7d &gt;20%)</p>
+              <p className="text-sm text-gray-400">Tradeable Now</p>
+              <p className="text-[11px] text-gray-500 -mt-0.5">net APR positive on 7-day hold</p>
               {loading && !summaryData.length ? (
                 <Skeleton className="h-8 w-16 mt-1 bg-gray-700" />
               ) : (
-                <p className="text-3xl font-bold mt-1 text-green-400">{highYieldPairs} <span className="text-lg text-gray-500 font-normal">/ {summaryData.length}</span></p>
+                <p className="text-3xl font-bold mt-1 text-green-400">{actionablePairs} <span className="text-lg text-gray-500 font-normal">/ {summaryData.length}</span></p>
               )}
             </CardContent>
           </Card>
-          <Card className="bg-[#1a1f2e] border-gray-800">
-            <CardContent className="p-6">
-              <p className="text-sm text-gray-400">Highest 7-Day Yield</p>
-              {loading && !summaryData.length ? (
-                <Skeleton className="h-8 w-24 mt-1 bg-gray-700" />
-              ) : (
-                <p className="text-3xl font-bold mt-1 text-green-400">
-                  {summaryData.length > 0 ? formatPercent(Math.max(...summaryData.map(d => d.annYield7d ?? 0))) : '0.000%'}
-                </p>
-              )}
-            </CardContent>
-          </Card>
-          <Card className="bg-[#1a1f2e] border-gray-800">
-            <CardContent className="p-6">
-              <div className="flex items-center gap-1.5">
-                <p className="text-sm text-gray-400">Highest Consistency</p>
-                <div className="group relative">
-                  <Info className="w-3.5 h-3.5 text-gray-500 cursor-help" />
-                  <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 w-56 hidden group-hover:block bg-gray-900 text-gray-300 text-xs rounded-md px-3 py-2 border border-gray-700 shadow-lg z-10">
-                    Consistency = % of time the cheaper venue stayed cheaper over the window. Higher means the trade direction is more reliable and less likely to flip.
-                  </div>
-                </div>
-              </div>
-              {loading && !summaryData.length ? (
-                <Skeleton className="h-8 w-24 mt-1 bg-gray-700" />
-              ) : (
-                <p className="text-3xl font-bold mt-1 text-gray-100">
-                  {summaryData.length > 0 ? `${Math.max(...summaryData.map(d => d.consistency7d ?? 0)).toFixed(1)}%` : '0.0%'}
-                </p>
-              )}
-            </CardContent>
-          </Card>
+          <TopPickCard
+            title="Top Pick"
+            subtitle={topPickIsPaidEntry ? "paid to enter · basis covers entry + fees" : "highest net APR among tradeable"}
+            pair={topPickPair}
+            loading={loading}
+            onClick={(id) => setSelectedPairId(id)}
+            badge={topPickIsPaidEntry ? "Paid Entry" : undefined}
+            emptyCopy="No pair is currently profitable on a 7-day hold"
+          />
+          <TopPickCard
+            title="Most Reliable"
+            subtitle="highest 14d hit rate among tradeable"
+            pair={mostReliablePair}
+            loading={loading}
+            onClick={(id) => setSelectedPairId(id)}
+            highlight="consistency"
+            emptyCopy="No tradeable pair to rank by reliability"
+          />
         </div>
 
         {/* Summary Table */}
@@ -371,6 +625,38 @@ function DetailView({ pairId, onClose, summary }: { pairId: string, onClose: () 
 
   const loading = isLoading || isFetching;
   const detailSummary = data?.summary || summary;
+
+  // Live refresh state — orderbook + current funding refetched on demand.
+  // Backend rate-limits to 1 call per 10s per pair; UI shows the retry message on 429.
+  const [liveData, setLiveData] = useState<ArbLiveResponse | null>(null);
+  const [liveLoading, setLiveLoading] = useState(false);
+  const [liveError, setLiveError] = useState<string | null>(null);
+
+  // Clear live overlay whenever the user switches pairs.
+  useEffect(() => {
+    setLiveData(null);
+    setLiveError(null);
+  }, [pairId]);
+
+  const onRefreshPair = async () => {
+    if (liveLoading) return;
+    setLiveLoading(true);
+    setLiveError(null);
+    try {
+      const fresh = await getArbLive(pairId);
+      setLiveData(fresh);
+    } catch (e) {
+      const status = (e as { status?: number } | undefined)?.status;
+      if (status === 429) {
+        const retryAfter = (e as { headers?: Headers })?.headers?.get?.("retry-after");
+        setLiveError(`Rate limited — try again in ${retryAfter ? `${retryAfter}s` : "a few seconds"}.`);
+      } else {
+        setLiveError(e instanceof Error ? e.message : "Refresh failed");
+      }
+    } finally {
+      setLiveLoading(false);
+    }
+  };
 
   const rawSeries = data?.timeSeries || [];
 
@@ -455,6 +741,12 @@ function DetailView({ pairId, onClose, summary }: { pairId: string, onClose: () 
                        detailSummary.suggestion === "LONG_HL_SHORT_BITMEX" ? "LONG Hyperliquid / SHORT BitMEX" :
                        "Wait for better entry"}
                     </h3>
+                    {detailSummary.suggestion !== "NEUTRAL" && detailSummary.consistency14d < 50 && (
+                      <div className="mt-1 flex items-center gap-1.5 text-xs text-amber-400">
+                        <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                        <span>Direction flipped vs 14-day majority — higher regime-change risk</span>
+                      </div>
+                    )}
                     <div className="mt-3 space-y-2 text-sm text-gray-300">
                       <div className="grid grid-cols-3 gap-3">
                         {[
@@ -467,7 +759,7 @@ function DetailView({ pairId, onClose, summary }: { pairId: string, onClose: () 
                             <p className="font-mono font-bold text-green-400">{formatPercent(y)}</p>
                             <p className="text-xs text-gray-400 mt-1">Ann. Yield</p>
                             <p className="font-mono font-semibold text-gray-200 mt-1">{cons.toFixed(1)}%</p>
-                            <p className="text-xs text-gray-500">Consistency</p>
+                            <p className="text-xs text-gray-500">Hit Rate</p>
                           </div>
                         ))}
                       </div>
@@ -493,6 +785,164 @@ function DetailView({ pairId, onClose, summary }: { pairId: string, onClose: () 
             </div>
           )}
 
+          {/* Orderbook (5 levels per side, live-refreshable) */}
+          {detailSummary && ((liveData?.bmexBids ?? detailSummary.bmexBids) || (liveData?.hlBids ?? detailSummary.hlBids)) && (() => {
+            const src = liveData ?? detailSummary;
+            const bmexBids = (liveData ? liveData.bmexBids : detailSummary.bmexBids) ?? [];
+            const bmexAsks = (liveData ? liveData.bmexAsks : detailSummary.bmexAsks) ?? [];
+            const hlBids = (liveData ? liveData.hlBids : detailSummary.hlBids) ?? [];
+            const hlAsks = (liveData ? liveData.hlAsks : detailSummary.hlAsks) ?? [];
+            const asOf = liveData ? liveData.fetchedAt : detailSummary.lastUpdated;
+            return (
+              <Card className="bg-[#1a1f2e] border-gray-800">
+                <CardHeader className="pb-2 px-4 pt-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <CardTitle className="text-base font-medium text-gray-200">
+                      Orderbook · {liveData ? "live" : "snapshot"}
+                      <span className="text-xs font-normal text-gray-500 ml-2">
+                        {asOf ? `as of ${formatTimeAgo(asOf)}` : ""} · prices differ between venues for ETF/index pairs (e.g. SPY vs SP500)
+                      </span>
+                    </CardTitle>
+                    <button
+                      onClick={onRefreshPair}
+                      disabled={liveLoading}
+                      className="flex items-center gap-1.5 px-3 py-1 h-[28px] rounded border border-gray-700 bg-gray-800 text-xs hover:bg-gray-700 transition-colors disabled:opacity-50 text-gray-300 shrink-0"
+                      title="Fetch fresh orderbook + current funding for this pair. Rate-limited to one call per 10 seconds."
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${liveLoading ? "animate-spin" : ""}`} />
+                      {liveLoading ? "Fetching…" : "Refresh this pair"}
+                    </button>
+                  </div>
+                  {liveError && (
+                    <p className="text-[11px] text-amber-400 mt-1">{liveError}</p>
+                  )}
+                </CardHeader>
+                <CardContent className="px-4 pb-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    {bmexBids.length && bmexAsks.length ? (
+                      <OrderbookPanel
+                        venue="BitMEX"
+                        symbol={src.bitmexSymbol}
+                        bids={bmexBids}
+                        asks={bmexAsks}
+                        accentColor="#FF6D00"
+                      />
+                    ) : (
+                      <div className="rounded-lg border border-gray-800 p-3 text-xs text-gray-500">BitMEX book unavailable</div>
+                    )}
+                    {hlBids.length && hlAsks.length ? (
+                      <OrderbookPanel
+                        venue="Hyperliquid"
+                        symbol={src.hlSymbol}
+                        bids={hlBids}
+                        asks={hlAsks}
+                        accentColor="#2962FF"
+                      />
+                    ) : (
+                      <div className="rounded-lg border border-gray-800 p-3 text-xs text-gray-500">Hyperliquid book unavailable</div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })()}
+
+          {detailSummary && detailSummary.totalCostPct !== null && detailSummary.totalCostPct !== undefined && (
+            <Card className="bg-[#1a1f2e] border-gray-800">
+              <CardHeader className="pb-2 px-4 pt-4">
+                <CardTitle className="text-base font-medium text-gray-200 flex items-center gap-2">
+                  Execution Economics
+                  <div className="group relative">
+                    <Info className="w-3.5 h-3.5 text-gray-500 cursor-help" />
+                    <div className="absolute left-0 top-full mt-2 w-80 hidden group-hover:block bg-gray-900 text-gray-300 text-xs rounded-md px-3 py-2 border border-gray-700 shadow-lg z-10">
+                      Round-trip cost = spread crossings (4 legs) + taker fees − favorable basis at entry.
+                      Basis is the price gap between venues. When funding normalizes (the trade's thesis),
+                      basis closes too — so the entry gap is captured as profit. For ETF vs index pairs
+                      (SPY/SP500, QQQ/Nasdaq100) the basis isn't economically meaningful and is excluded.
+                    </div>
+                  </div>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="px-4 pb-4 space-y-3">
+                <div className="grid grid-cols-4 gap-3 text-sm">
+                  <div className="bg-black/20 rounded-lg p-3">
+                    <p className="text-xs text-gray-500 mb-1">Spread cost</p>
+                    <p className="font-mono font-bold text-gray-100">{formatPercent2(detailSummary.crossingCostPct ?? 0)}</p>
+                    <p className="text-[10px] text-gray-500 mt-1">both venues, round-trip</p>
+                  </div>
+                  <div className="bg-black/20 rounded-lg p-3">
+                    <p className="text-xs text-gray-500 mb-1">Fees</p>
+                    <p className="font-mono font-bold text-gray-100">{formatPercent2(detailSummary.feeCostPct)}</p>
+                    <p className="text-[10px] text-gray-500 mt-1">4 taker crossings</p>
+                  </div>
+                  <div className="bg-black/20 rounded-lg p-3">
+                    <p className="text-xs text-gray-500 mb-1">Basis @ entry</p>
+                    {detailSummary.favorableBasisPct === null || detailSummary.favorableBasisPct === undefined ? (
+                      <>
+                        <p className="font-mono font-bold text-gray-500">—</p>
+                        <p className="text-[10px] text-gray-500 mt-1">scale-mismatched</p>
+                      </>
+                    ) : detailSummary.favorableBasisPct >= 0 ? (
+                      <>
+                        <p className="font-mono font-bold text-green-400">−{formatPercent2(detailSummary.favorableBasisPct)}</p>
+                        <p className="text-[10px] text-green-500 mt-1">favorable</p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="font-mono font-bold text-red-400">+{formatPercent2(-detailSummary.favorableBasisPct)}</p>
+                        <p className="text-[10px] text-red-500 mt-1">unfavorable</p>
+                      </>
+                    )}
+                  </div>
+                  <div className={`rounded-lg p-3 border ${detailSummary.totalCostPct < 0 ? "bg-green-500/10 border-green-500/30" : "bg-black/20 border-transparent"}`}>
+                    <p className="text-xs text-gray-500 mb-1">Total entry+exit</p>
+                    <p className={`font-mono font-bold ${detailSummary.totalCostPct < 0 ? "text-green-400" : "text-gray-100"}`}>
+                      {detailSummary.totalCostPct < 0 ? `−${formatPercent2(-detailSummary.totalCostPct)}` : formatPercent2(detailSummary.totalCostPct)}
+                    </p>
+                    <p className="text-[10px] text-gray-500 mt-1">
+                      {detailSummary.totalCostPct < 0 ? "paid to enter — profitable before any funding" : `b/e: ${formatBreakeven(detailSummary.breakevenHours)}`}
+                    </p>
+                  </div>
+                </div>
+                {detailSummary.favorableBasisPct !== null && detailSummary.favorableBasisPct !== undefined && (
+                  <p className="text-xs text-gray-500 italic">
+                    Assumes basis closes to ~0 at exit (correlated with funding normalization).
+                    Conservative cost without this assumption: {formatPercent2((detailSummary.crossingCostPct ?? 0) + detailSummary.feeCostPct)}.
+                  </p>
+                )}
+                <div>
+                  <p className="text-xs text-gray-500 mb-2">Net APR (gross funding minus cost, amortized over hold period):</p>
+                  <div className="grid grid-cols-3 gap-3">
+                    {[
+                      { label: "1-Day", val: detailSummary.netAPR1d, note: "close within 24h" },
+                      { label: "7-Day", val: detailSummary.netAPR7d, note: "close within a week" },
+                      { label: "30-Day", val: detailSummary.netAPR30d, note: "close within a month" },
+                    ].map(({ label, val, note }) => (
+                      <div key={label} className="bg-black/20 rounded-lg p-3">
+                        <p className="text-xs text-gray-500 mb-1">{label}</p>
+                        <p className={`font-mono font-bold text-lg ${netEdgeColor(val)}`}>
+                          {val === null || val === undefined ? "—" : formatPercent(val)}
+                        </p>
+                        <p className="text-[10px] text-gray-500 mt-1">{note}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                {detailSummary.netAPR7d !== null && detailSummary.netAPR7d !== undefined && detailSummary.netAPR7d > 0 ? (
+                  <div className="flex items-center gap-2 text-sm text-green-400 bg-green-500/10 border border-green-500/30 rounded-lg p-2">
+                    <TrendingUp className="w-4 h-4 shrink-0" />
+                    <span>Actionable: current funding spread more than pays back entry+exit within a 7-day hold.</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 text-sm text-yellow-400 bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    <span>Not actionable on a 7-day horizon — cost exceeds the expected funding earnings over a week.</span>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
           {/* Charts */}
           {loading ? (
             <div className="space-y-6">
@@ -506,7 +956,7 @@ function DetailView({ pairId, onClose, summary }: { pairId: string, onClose: () 
               {/* 1. Funding Rate Comparison */}
               <Card className="bg-[#1a1f2e] border-gray-800">
                 <CardHeader className="pb-2 px-4 pt-4">
-                  <CardTitle className="text-base font-medium text-gray-200">14-Day Funding Rate Comparison (APR)</CardTitle>
+                  <CardTitle className="text-base font-medium text-gray-200">30-Day Funding Rate Comparison (APR)</CardTitle>
                 </CardHeader>
                 <CardContent className="px-2">
                   <ResponsiveContainer width="100%" height={300} debounce={0}>
@@ -538,7 +988,7 @@ function DetailView({ pairId, onClose, summary }: { pairId: string, onClose: () 
               <Card className="bg-[#1a1f2e] border-gray-800">
                 <CardHeader className="pb-2 px-4 pt-4">
                   <CardTitle className="text-base font-medium text-gray-200">
-                    Funding Spread (BitMEX − HL) <span className="text-xs font-normal text-gray-500 ml-2">Green = BitMEX cheaper · Red = BitMEX pricier</span>
+                    Funding Spread (BitMEX − HL) <span className="text-xs font-normal text-gray-500 ml-2">Green = BMEX funding lower (LONG_BMEX pays) · Red = BMEX funding higher (LONG_HL pays)</span>
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="px-2">
@@ -574,7 +1024,7 @@ function DetailView({ pairId, onClose, summary }: { pairId: string, onClose: () 
                       <Area
                         type="step"
                         dataKey="spreadNeg"
-                        name="BitMEX Cheaper"
+                        name="BMEX funding lower (LONG_BMEX pays)"
                         stroke={CHART_COLORS.spreadGreen}
                         fill="url(#gradGreen)"
                         isAnimationActive={false}
@@ -585,7 +1035,7 @@ function DetailView({ pairId, onClose, summary }: { pairId: string, onClose: () 
                       <Area
                         type="step"
                         dataKey="spreadPos"
-                        name="BitMEX Pricier"
+                        name="BMEX funding higher (LONG_HL pays)"
                         stroke={CHART_COLORS.spreadRed}
                         fill="url(#gradRed)"
                         isAnimationActive={false}

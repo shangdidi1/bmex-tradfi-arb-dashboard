@@ -1,7 +1,11 @@
 import { Router, type IRouter } from "express";
+import { db, pairSnapshots } from "@workspace/db";
+import { eq } from "drizzle-orm";
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
+
+type PairDetail = { summary: PairSummary; timeSeries: TimeSeriesPoint[] };
 
 const DAYS_LOOKBACK = 30;
 const BITMEX_INTERVALS_PER_DAY = 3;
@@ -28,7 +32,7 @@ const PAIRS: Record<string, { name: string; bitmex: string; hl: string }> = {
   "19": { name: "Oracle", bitmex: "ORCLUSDT", hl: "xyz:ORCL" },
   "20": { name: "MicroStrategy", bitmex: "MSTRUSDT", hl: "xyz:MSTR" },
   "21": { name: "Netflix", bitmex: "NFLXUSDT", hl: "xyz:NFLX" },
-  "22": { name: "EUR/USD", bitmex: "EURUSD", hl: "xyz:EURUSD" },
+  "22": { name: "EUR/USD", bitmex: "EURUSD", hl: "xyz:EUR" },
 };
 
 interface TimeSeriesPoint {
@@ -69,22 +73,82 @@ interface PairSummary {
   annYield30d: number;
   suggestion: "LONG_BITMEX_SHORT_HL" | "LONG_HL_SHORT_BITMEX" | "NEUTRAL";
   lastUpdated: string;
+  // Execution economics — orderbook-based, relevant for real-time actionability
+  bmexBid: number | null;
+  bmexAsk: number | null;
+  hlBid: number | null;
+  hlAsk: number | null;
+  bmexBidSize: number | null;
+  bmexAskSize: number | null;
+  hlBidSize: number | null;
+  hlAskSize: number | null;
+  bmexBids: BookLevel[] | null;
+  bmexAsks: BookLevel[] | null;
+  hlBids: BookLevel[] | null;
+  hlAsks: BookLevel[] | null;
+  crossingCostPct: number | null;
+  feeCostPct: number;
+  priceBasisPct: number | null;
+  favorableBasisPct: number | null;
+  totalCostPct: number | null;
+  netAPR1d: number | null;
+  netAPR7d: number | null;
+  netAPR30d: number | null;
+  breakevenHours: number | null;
 }
 
-interface CacheEntry<T> {
-  data: T;
-  cachedAt: number;
-}
-
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-const summaryCache: Map<string, CacheEntry<PairSummary>> = new Map();
-const detailCache: Map<string, CacheEntry<{ summary: PairSummary; timeSeries: TimeSeriesPoint[] }>> = new Map();
+// Taker fees (percent of notional, per trade). Env-overridable.
+// Round-trip = 2 × (BMEX + HL) = 4 taker crossings total.
+const BMEX_TAKER_FEE_PCT = parseFloat(process.env["BMEX_TAKER_FEE_PCT"] ?? "0.05");
+const HL_TAKER_FEE_PCT = parseFloat(process.env["HL_TAKER_FEE_PCT"] ?? "0.008");
+const FEE_COST_ROUNDTRIP_PCT = 2 * (BMEX_TAKER_FEE_PCT + HL_TAKER_FEE_PCT);
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function fetchBitmexInstrument(symbol: string): Promise<{ openInterest?: number; openValueUsdt?: number } | null> {
+// Shared Hyperliquid rate limiter. HL's /info endpoint uses weight-based per-IP
+// limits (fundingHistory and candleSnapshot each cost 20 of a 1200/min budget →
+// ~1 heavy req/sec sustained, with burst tolerance). We serialize all HL request
+// starts through a single chain with a min interval, and retry 429s with
+// exponential backoff (respecting Retry-After when present).
+const HL_MIN_INTERVAL_MS = 250;
+const HL_MAX_RETRIES = 4;
+let hlLastStart = 0;
+let hlGate: Promise<void> = Promise.resolve();
+
+async function hlAcquire(): Promise<void> {
+  const prev = hlGate;
+  let release!: () => void;
+  const next = new Promise<void>((r) => { release = r; });
+  hlGate = next;
+  await prev;
+  const now = Date.now();
+  const wait = Math.max(0, HL_MIN_INTERVAL_MS - (now - hlLastStart));
+  if (wait > 0) await sleep(wait);
+  hlLastStart = Date.now();
+  // Release the gate so the next caller can advance.
+  release();
+}
+
+async function hlFetch(body: object): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    await hlAcquire();
+    const res = await fetch("https://api.hyperliquid.xyz/info", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (res.status !== 429 || attempt >= HL_MAX_RETRIES) return res;
+    const retryAfterSec = parseInt(res.headers.get("retry-after") ?? "0", 10);
+    const backoff = retryAfterSec > 0
+      ? retryAfterSec * 1000
+      : Math.min(8000, 500 * Math.pow(2, attempt));
+    await sleep(backoff);
+  }
+}
+
+async function fetchBitmexInstrument(symbol: string): Promise<{ openInterest?: number; openValueUsdt?: number; underlyingToPositionMultiplier?: number } | null> {
   try {
     const url = `https://www.bitmex.com/api/v1/instrument?symbol=${encodeURIComponent(symbol)}`;
     const res = await fetch(url);
@@ -92,16 +156,101 @@ async function fetchBitmexInstrument(symbol: string): Promise<{ openInterest?: n
       logger.warn({ symbol, status: res.status, statusText: res.statusText }, "BitMEX instrument returned non-OK status");
       return null;
     }
-    const data = await res.json() as Array<{ openInterest?: number; openValue?: number; quoteToSettleMultiplier?: number }>;
+    const data = await res.json() as Array<{ openInterest?: number; openValue?: number; quoteToSettleMultiplier?: number; underlyingToPositionMultiplier?: number }>;
     const item = data[0];
     if (!item) return null;
     const multiplier = item.quoteToSettleMultiplier ?? 1_000_000;
     return {
       openInterest: item.openInterest,
       openValueUsdt: item.openValue ? item.openValue / multiplier : 0,
+      underlyingToPositionMultiplier: item.underlyingToPositionMultiplier ?? 1,
     };
   } catch (err) {
     logger.warn({ symbol, err }, "BitMEX instrument request failed");
+    return null;
+  }
+}
+
+type BookLevel = { px: number; size: number };
+type BookTop = { bid: number; ask: number; bidSize: number; askSize: number; bids: BookLevel[]; asks: BookLevel[] };
+
+const ORDERBOOK_DEPTH = 5;
+
+function normalizeBookSizes(book: BookTop | null, divisor: number): BookTop | null {
+  if (!book || divisor === 1 || divisor <= 0) return book;
+  return {
+    bid: book.bid,
+    ask: book.ask,
+    bidSize: book.bidSize / divisor,
+    askSize: book.askSize / divisor,
+    bids: book.bids.map((l) => ({ px: l.px, size: l.size / divisor })),
+    asks: book.asks.map((l) => ({ px: l.px, size: l.size / divisor })),
+  };
+}
+
+async function fetchBitmexOrderbookTop(symbol: string, positionMultiplier = 1): Promise<BookTop | null> {
+  try {
+    const url = `https://www.bitmex.com/api/v1/orderBook/L2?symbol=${encodeURIComponent(symbol)}&depth=${ORDERBOOK_DEPTH}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      logger.warn({ symbol, status: res.status }, "BitMEX orderbook returned non-OK status");
+      return null;
+    }
+    const data = await res.json() as Array<{ side: "Buy" | "Sell"; price: number; size?: number }>;
+    // BitMEX `size` is in CONTRACTS. Convert to base-coin units by dividing by
+    // `underlyingToPositionMultiplier` (fetched per-instrument). e.g. BRENTUSDT
+    // has multiplier=10, so 10 contracts = 1 barrel. Crypto perps often have
+    // multiplier=1 (1 contract = 1 coin).
+    const toBaseUnits = (contracts: number) => contracts / (positionMultiplier || 1);
+    const bids: BookLevel[] = data
+      .filter((d) => d.side === "Buy")
+      .map((d) => ({ px: d.price, size: toBaseUnits(d.size ?? 0) }))
+      .sort((a, b) => b.px - a.px);
+    const asks: BookLevel[] = data
+      .filter((d) => d.side === "Sell")
+      .map((d) => ({ px: d.price, size: toBaseUnits(d.size ?? 0) }))
+      .sort((a, b) => a.px - b.px);
+    if (!bids[0] || !asks[0] || bids[0].px <= 0 || asks[0].px <= 0) return null;
+    return {
+      bid: bids[0].px,
+      ask: asks[0].px,
+      bidSize: bids[0].size,
+      askSize: asks[0].size,
+      bids,
+      asks,
+    };
+  } catch (err) {
+    logger.warn({ symbol, err }, "BitMEX orderbook request failed");
+    return null;
+  }
+}
+
+async function fetchHyperliquidOrderbookTop(coin: string): Promise<BookTop | null> {
+  try {
+    const res = await hlFetch({ type: "l2Book", coin });
+    if (!res.ok) {
+      logger.warn({ coin, status: res.status }, "Hyperliquid l2Book returned non-OK status");
+      return null;
+    }
+    const data = await res.json() as { levels?: Array<Array<{ px: string; sz: string }>> };
+    // levels[0] = bids (highest first), levels[1] = asks (lowest first). Take top N.
+    const bids: BookLevel[] = (data.levels?.[0] ?? [])
+      .slice(0, ORDERBOOK_DEPTH)
+      .map((l) => ({ px: parseFloat(l.px), size: parseFloat(l.sz) }));
+    const asks: BookLevel[] = (data.levels?.[1] ?? [])
+      .slice(0, ORDERBOOK_DEPTH)
+      .map((l) => ({ px: parseFloat(l.px), size: parseFloat(l.sz) }));
+    if (!bids[0] || !asks[0] || !(bids[0].px > 0 && asks[0].px > 0)) return null;
+    return {
+      bid: bids[0].px,
+      ask: asks[0].px,
+      bidSize: bids[0].size,
+      askSize: asks[0].size,
+      bids,
+      asks,
+    };
+  } catch (err) {
+    logger.warn({ coin, err }, "Hyperliquid l2Book request failed");
     return null;
   }
 }
@@ -159,11 +308,7 @@ async function fetchHyperliquidFundingHistory(coin: string): Promise<Array<{ ts:
   while (cur < endTimeMs) {
     const chunkEnd = Math.min(endTimeMs, cur + chunkMs);
     try {
-      const res = await fetch("https://api.hyperliquid.xyz/info", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "fundingHistory", coin, startTime: cur, endTime: chunkEnd }),
-      });
+      const res = await hlFetch({ type: "fundingHistory", coin, startTime: cur, endTime: chunkEnd });
       if (res.ok) {
         const data = await res.json() as Array<{ time: number; fundingRate: string }>;
         if (Array.isArray(data)) {
@@ -182,7 +327,6 @@ async function fetchHyperliquidFundingHistory(coin: string): Promise<Array<{ ts:
       logger.warn({ coin, err }, "Hyperliquid fundingHistory request failed");
     }
     cur = chunkEnd;
-    await sleep(150);
   }
   if (hadError && result.length === 0) {
     logger.warn({ coin }, "Hyperliquid fundingHistory returned no data due to errors");
@@ -241,11 +385,7 @@ async function fetchHyperliquidPriceHistory(coin: string): Promise<Array<{ ts: n
   while (cur < endTimeMs) {
     const chunkEnd = Math.min(endTimeMs, cur + chunkMs);
     try {
-      const res = await fetch("https://api.hyperliquid.xyz/info", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "candleSnapshot", req: { coin, interval: "5m", startTime: cur, endTime: chunkEnd } }),
-      });
+      const res = await hlFetch({ type: "candleSnapshot", req: { coin, interval: "5m", startTime: cur, endTime: chunkEnd } });
       if (res.ok) {
         const data = await res.json() as Array<{ t: number; c: string }>;
         if (Array.isArray(data)) {
@@ -263,7 +403,6 @@ async function fetchHyperliquidPriceHistory(coin: string): Promise<Array<{ ts: n
       logger.warn({ coin, err }, "Hyperliquid candleSnapshot request failed");
     }
     cur = chunkEnd;
-    await sleep(150);
   }
   if (hadError && result.length === 0) {
     logger.warn({ coin }, "Hyperliquid candleSnapshot returned no data due to errors");
@@ -347,15 +486,28 @@ function buildTimeSeries(
   return points.filter((_, i) => i % step === 0);
 }
 
-function computeWindowMetrics(timeSeries: TimeSeriesPoint[], windowDays: number): WindowMetrics {
+function computeWindowMetrics(
+  timeSeries: TimeSeriesPoint[],
+  windowDays: number,
+  direction: PairSummary["suggestion"],
+): WindowMetrics {
   const cutoff = Date.now() - windowDays * 24 * 60 * 60 * 1000;
   const pts = timeSeries.filter((p) => new Date(p.timestamp).getTime() >= cutoff);
   const total = pts.length;
 
-  const bmexLower = pts.filter((p) => p.fundingSpread < 0).length;
-  const consistencyScore = total > 0 ? parseFloat(((bmexLower / total) * 100).toFixed(1)) : 50;
+  // Consistency = % of time the *suggested* direction was actually paying.
+  //   LONG_BITMEX_SHORT_HL pays when spread < 0 (BMEX cheaper)
+  //   LONG_HL_SHORT_BITMEX pays when spread > 0 (HL cheaper)
+  //   NEUTRAL: no direction, default to 50
+  let consistencyScore = 50;
+  if (total > 0 && direction !== "NEUTRAL") {
+    const paying = pts.filter((p) =>
+      direction === "LONG_BITMEX_SHORT_HL" ? p.fundingSpread < 0 : p.fundingSpread > 0,
+    ).length;
+    consistencyScore = parseFloat(((paying / total) * 100).toFixed(1));
+  }
 
-  // Arb yield: always positive — we always take the favorable direction
+  // Arb yield: absolute (assumes you took the favorable direction each tick — historical reference).
   const cumYield = pts.reduce((sum, p) => sum + Math.abs(p.fundingSpread) / (365 * 24 * 12), 0);
   const annualizedYield = total > 0 ? parseFloat((cumYield * (365 / windowDays)).toFixed(4)) : 0;
 
@@ -375,26 +527,97 @@ function computeSummary(
   bitmexSymbol: string,
   hlSymbol: string,
   bitmexOpenInterestUsdt: number,
+  bmexBook: BookTop | null,
+  hlBook: BookTop | null,
 ): PairSummary {
   const spread = currentBmexAPR - currentHlAPR;
 
-  const w7 = computeWindowMetrics(timeSeries, 7);
-  const w14 = computeWindowMetrics(timeSeries, 14);
-  const w30 = computeWindowMetrics(timeSeries, 30);
-
-  // Determine suggestion from 14d mean spread direction
-  const pts14 = timeSeries.filter((p) => new Date(p.timestamp).getTime() >= Date.now() - 14 * 24 * 60 * 60 * 1000);
-  const meanSpread14 = pts14.length > 0
-    ? pts14.reduce((sum, p) => sum + p.fundingSpread, 0) / pts14.length
-    : spread;
-
+  // Suggestion: the direction that's paying RIGHT NOW. Historical mean is context but
+  // shouldn't override current reality — a trader who sees "LONG_HL" on a pair where
+  // current funding makes that direction lose money is getting a stale signal. Consistency
+  // metrics below show how reliable the current direction has been historically.
   let suggestion: PairSummary["suggestion"] = "NEUTRAL";
-  if (Math.abs(meanSpread14) > 0.1) {
-    suggestion = meanSpread14 < 0 ? "LONG_BITMEX_SHORT_HL" : "LONG_HL_SHORT_BITMEX";
+  if (Math.abs(spread) > 0.1) {
+    suggestion = spread < 0 ? "LONG_BITMEX_SHORT_HL" : "LONG_HL_SHORT_BITMEX";
   }
+
+  const w7 = computeWindowMetrics(timeSeries, 7, suggestion);
+  const w14 = computeWindowMetrics(timeSeries, 14, suggestion);
+  const w30 = computeWindowMetrics(timeSeries, 30, suggestion);
 
   const latestPoint = timeSeries.length > 0 ? timeSeries[timeSeries.length - 1] : null;
   const priceSpreadPct = latestPoint?.priceSpreadPct ?? 0;
+
+  // Execution economics — modeled as a funding-arb trader would P&L the round trip.
+  //
+  // Three P&L components over the hold:
+  //   1) Funding accrual (gross APR × hold / 365) — the reason for the trade
+  //   2) Bid-ask crossing on 4 legs (entry long, entry short, exit long, exit short)
+  //   3) Price basis at entry vs exit
+  //
+  // (2) is always a cost. (3) is usually IN FAVOR of the trade: the current basis exists
+  // because funding is mispriced, and when funding normalizes (the thesis), the basis
+  // closes too. If we assume exit at zero basis, we capture the entry basis as profit.
+  // This matches the user's "close with no spread or improved spread" assumption.
+  //
+  // Formulas (all as % of notional):
+  //   crossingCostPct = sum of each venue's own-mid bid-ask spread — scale-agnostic, correct
+  //                     even for ETF-vs-index pairs where mids differ 10-40x
+  //   priceBasisPct   = (bmexMid − hlMid) / avgMid × 100, signed (positive = BMEX pricier)
+  //   favorableBasisPct = basis aligned to trade direction:
+  //       LONG_BITMEX_SHORT_HL  → wants BMEX cheap  → favorable = −priceBasisPct
+  //       LONG_HL_SHORT_BITMEX  → wants BMEX pricey → favorable = +priceBasisPct
+  //       NEUTRAL / unknown     → 0
+  //   totalCostPct    = crossingCostPct + feeCostPct − favorableBasisPct
+  //
+  // For scale-mismatched pairs (SPY vs SP500, QQQ vs Nasdaq100) the raw basis has no
+  // economic meaning — the two venues track different references that won't converge.
+  // In those cases priceBasisPct and favorableBasisPct are nulled out and totalCostPct
+  // reduces to crossing + fees (conservative).
+  let crossingCostPct: number | null = null;
+  let priceBasisPct: number | null = null;
+  let favorableBasisPct: number | null = null;
+  if (bmexBook && hlBook) {
+    const bmexMid = (bmexBook.ask + bmexBook.bid) / 2;
+    const hlMid = (hlBook.ask + hlBook.bid) / 2;
+    if (bmexMid > 0 && hlMid > 0) {
+      const bmexCrossPct = ((bmexBook.ask - bmexBook.bid) / bmexMid) * 100;
+      const hlCrossPct = ((hlBook.ask - hlBook.bid) / hlMid) * 100;
+      crossingCostPct = bmexCrossPct + hlCrossPct;
+
+      const avgMid = (bmexMid + hlMid) / 2;
+      const rawBasis = ((bmexMid - hlMid) / avgMid) * 100;
+      // Scale-match heuristic: venues within 20% of each other → same asset → basis converges.
+      const isScaleMatched = Math.abs(rawBasis) < 20;
+      if (isScaleMatched) {
+        priceBasisPct = rawBasis;
+        if (suggestion === "LONG_BITMEX_SHORT_HL") {
+          favorableBasisPct = -rawBasis;
+        } else if (suggestion === "LONG_HL_SHORT_BITMEX") {
+          favorableBasisPct = rawBasis;
+        } else {
+          favorableBasisPct = 0;
+        }
+      }
+    }
+  }
+  const totalCostPct =
+    crossingCostPct !== null
+      ? crossingCostPct + FEE_COST_ROUNDTRIP_PCT - (favorableBasisPct ?? 0)
+      : null;
+  const grossAPR = Math.abs(spread);
+  const netFor = (days: number) =>
+    totalCostPct !== null ? parseFloat((grossAPR - (totalCostPct * 365) / days).toFixed(4)) : null;
+  // Breakeven: hours of funding accrual needed to recover totalCost.
+  // If totalCost ≤ 0 (entry basis covers everything), trade is already profitable at entry — return 0.
+  const breakevenHours =
+    totalCostPct === null
+      ? null
+      : totalCostPct <= 0
+        ? 0
+        : grossAPR > 0
+          ? parseFloat(((totalCostPct * 365 * 24) / grossAPR).toFixed(2))
+          : null;
 
   return {
     pairId,
@@ -418,6 +641,28 @@ function computeSummary(
     annYield30d: w30.annualizedYield,
     suggestion,
     lastUpdated: new Date().toISOString(),
+    // Execution economics (real-time orderbook-derived)
+    bmexBid: bmexBook?.bid ?? null,
+    bmexAsk: bmexBook?.ask ?? null,
+    hlBid: hlBook?.bid ?? null,
+    hlAsk: hlBook?.ask ?? null,
+    bmexBidSize: bmexBook?.bidSize ?? null,
+    bmexAskSize: bmexBook?.askSize ?? null,
+    hlBidSize: hlBook?.bidSize ?? null,
+    hlAskSize: hlBook?.askSize ?? null,
+    bmexBids: bmexBook?.bids ?? null,
+    bmexAsks: bmexBook?.asks ?? null,
+    hlBids: hlBook?.bids ?? null,
+    hlAsks: hlBook?.asks ?? null,
+    crossingCostPct: crossingCostPct !== null ? parseFloat(crossingCostPct.toFixed(4)) : null,
+    feeCostPct: parseFloat(FEE_COST_ROUNDTRIP_PCT.toFixed(4)),
+    priceBasisPct: priceBasisPct !== null ? parseFloat(priceBasisPct.toFixed(4)) : null,
+    favorableBasisPct: favorableBasisPct !== null ? parseFloat(favorableBasisPct.toFixed(4)) : null,
+    totalCostPct: totalCostPct !== null ? parseFloat(totalCostPct.toFixed(4)) : null,
+    netAPR1d: netFor(1),
+    netAPR7d: netFor(7),
+    netAPR30d: netFor(30),
+    breakevenHours,
   };
 }
 
@@ -427,13 +672,19 @@ async function buildPairDetail(pairId: string): Promise<{ summary: PairSummary; 
 
   logger.info({ pairId, symbol: pair.bitmex }, "Fetching detail data for pair");
 
-  const [bmexFunding, hlFunding, bmexPrice, hlPrice, bmexInstrument] = await Promise.all([
+  const [bmexFunding, hlFunding, bmexPrice, hlPrice, bmexInstrument, bmexBookRaw, hlBook] = await Promise.all([
     fetchBitmexFundingHistory(pair.bitmex),
     fetchHyperliquidFundingHistory(pair.hl),
     fetchBitmexPriceHistory(pair.bitmex),
     fetchHyperliquidPriceHistory(pair.hl),
     fetchBitmexInstrument(pair.bitmex),
+    fetchBitmexOrderbookTop(pair.bitmex),
+    fetchHyperliquidOrderbookTop(pair.hl),
   ]);
+  // BitMEX returns orderbook `size` in CONTRACTS. Convert to base units
+  // (barrels, shares, etc.) using the instrument's underlyingToPositionMultiplier
+  // so it matches HL's convention and `size × price` yields correct USD notional.
+  const bmexBook = normalizeBookSizes(bmexBookRaw, bmexInstrument?.underlyingToPositionMultiplier ?? 1);
 
   const hlFundingMissing = hlFunding.length === 0;
   const hlPriceMissing = hlPrice.length === 0;
@@ -467,85 +718,182 @@ async function buildPairDetail(pairId: string): Promise<{ summary: PairSummary; 
   const currentBmexAPR = bmexFunding.length > 0 ? bmexFunding[bmexFunding.length - 1].apr : 0;
   const currentHlAPR = hlFunding.length > 0 ? hlFunding[hlFunding.length - 1].apr : 0;
 
-  const summary = computeSummary(pairId, timeSeries, currentBmexAPR, currentHlAPR, pair.name, pair.bitmex, pair.hl, bmexInstrument?.openValueUsdt ?? 0);
+  const summary = computeSummary(pairId, timeSeries, currentBmexAPR, currentHlAPR, pair.name, pair.bitmex, pair.hl, bmexInstrument?.openValueUsdt ?? 0, bmexBook, hlBook);
   return { summary, timeSeries };
 }
 
-// GET /api/arb/summary
-router.get("/arb/summary", async (req, res): Promise<void> => {
-  try {
-    const now = Date.now();
+// GET /api/arb/refresh — runs the heavy fetch for all pairs and UPSERTs to DB.
+// Called by Vercel Cron (auto-sends Bearer CRON_SECRET when env var is set).
+// GET (not POST) because Vercel Cron only issues GET requests.
+router.get("/arb/refresh", async (req, res): Promise<void> => {
+  const expected = process.env["CRON_SECRET"];
+  if (!expected) {
+    logger.error("CRON_SECRET not configured; refusing refresh");
+    res.status(500).json({ error: "CRON_SECRET not configured" });
+    return;
+  }
+  const provided = req.header("authorization") ?? "";
+  if (provided !== `Bearer ${expected}`) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
 
-    const cachedPairs: PairSummary[] = [];
-    const stalePairIds: string[] = [];
-    const cacheTimestamps: number[] = [];
+  const startedAt = Date.now();
+  const refreshed: string[] = [];
+  const failed: string[] = [];
+  const pairIds = Object.keys(PAIRS);
+  const BATCH_SIZE = 3;
 
-    for (const pairId of Object.keys(PAIRS)) {
-      const cached = summaryCache.get(pairId);
-      if (cached && now - cached.cachedAt < CACHE_TTL_MS) {
-        cachedPairs.push(cached.data);
-        cacheTimestamps.push(cached.cachedAt);
-      } else {
-        stalePairIds.push(pairId);
-      }
-    }
-
-    if (stalePairIds.length > 0) {
-      const BATCH_SIZE = 3;
-      for (let i = 0; i < stalePairIds.length; i += BATCH_SIZE) {
-        const batch = stalePairIds.slice(i, i + BATCH_SIZE);
-        const results = await Promise.allSettled(batch.map((id) => buildPairDetail(id)));
-        for (let j = 0; j < batch.length; j++) {
-          const pairId = batch[j];
-          const result = results[j];
-          if (result.status === "fulfilled") {
-            const detail = result.value;
-            detailCache.set(pairId, { data: detail, cachedAt: now });
-            summaryCache.set(pairId, { data: detail.summary, cachedAt: now });
-            cachedPairs.push(detail.summary);
-            cacheTimestamps.push(now);
-          } else {
-            logger.error({ pairId, reason: result.reason }, "Failed to build detail for pair during summary");
-          }
+  for (let i = 0; i < pairIds.length; i += BATCH_SIZE) {
+    const batch = pairIds.slice(i, i + BATCH_SIZE);
+    const results = await Promise.allSettled(batch.map((id) => buildPairDetail(id)));
+    for (let j = 0; j < batch.length; j++) {
+      const pairId = batch[j];
+      const result = results[j];
+      if (result.status === "fulfilled") {
+        try {
+          await db
+            .insert(pairSnapshots)
+            .values({ pairId, data: result.value, fetchedAt: new Date() })
+            .onConflictDoUpdate({
+              target: pairSnapshots.pairId,
+              set: { data: result.value, fetchedAt: new Date() },
+            });
+          refreshed.push(pairId);
+        } catch (err) {
+          logger.error({ pairId, err }, "Failed to UPSERT pair snapshot");
+          failed.push(pairId);
         }
+      } else {
+        logger.error({ pairId, reason: result.reason }, "Failed to build pair detail during refresh");
+        failed.push(pairId);
       }
     }
+  }
 
-    cachedPairs.sort((a, b) => parseInt(a.pairId) - parseInt(b.pairId));
-    const cachedAt = cacheTimestamps.length > 0 ? new Date(Math.min(...cacheTimestamps)).toISOString() : new Date().toISOString();
+  const durationMs = Date.now() - startedAt;
+  logger.info({ refreshed: refreshed.length, failed: failed.length, durationMs }, "Refresh complete");
+  res.json({ refreshed, failed, durationMs });
+});
 
-    res.json({ pairs: cachedPairs, cachedAt });
+// GET /api/arb/summary — reads latest snapshots from DB.
+router.get("/arb/summary", async (_req, res): Promise<void> => {
+  try {
+    const rows = await db.select().from(pairSnapshots);
+    if (rows.length === 0) {
+      res.json({ pairs: [], cachedAt: null, status: "bootstrapping" });
+      return;
+    }
+
+    const summaries = rows
+      .map((r) => (r.data as PairDetail).summary)
+      .sort((a, b) => parseInt(a.pairId) - parseInt(b.pairId));
+    const oldest = rows.reduce((min, r) => (r.fetchedAt < min ? r.fetchedAt : min), rows[0].fetchedAt);
+
+    res.json({ pairs: summaries, cachedAt: oldest.toISOString() });
   } catch (err) {
-    logger.error({ err }, "Error fetching arb summary");
+    logger.error({ err }, "Error reading arb summary from DB");
     res.status(500).json({ error: "Failed to fetch summary" });
   }
 });
 
-// GET /api/arb/:pairId
+// GET /api/arb/:pairId/live — lightweight on-demand refresh for one pair.
+// Fetches fresh orderbooks + current funding (no 30-day history), bypassing the DB.
+// Intended for the "Refresh this pair" button in the detail view.
+// Rate-limited in-memory: 10s between calls per pair across all clients.
+const LIVE_RATE_LIMIT_MS = 10_000;
+const liveLastCallAt: Map<string, number> = new Map();
+
+async function fetchBitmexLatestFundingAPR(symbol: string): Promise<number> {
+  try {
+    const url = `https://www.bitmex.com/api/v1/funding?symbol=${encodeURIComponent(symbol)}&count=1&reverse=true`;
+    const res = await fetch(url);
+    if (!res.ok) return 0;
+    const data = await res.json() as Array<{ fundingRate?: number }>;
+    const rate = data[0]?.fundingRate ?? 0;
+    return rate * BITMEX_INTERVALS_PER_DAY * 365 * 100;
+  } catch {
+    return 0;
+  }
+}
+
+async function fetchHyperliquidLatestFundingAPR(coin: string): Promise<number> {
+  try {
+    const now = Date.now();
+    const res = await hlFetch({ type: "fundingHistory", coin, startTime: now - 2 * 60 * 60 * 1000, endTime: now });
+    if (!res.ok) return 0;
+    const data = await res.json() as Array<{ fundingRate: string }>;
+    if (!Array.isArray(data) || data.length === 0) return 0;
+    const latest = parseFloat(data[data.length - 1].fundingRate);
+    return latest * 24 * 365 * 100;
+  } catch {
+    return 0;
+  }
+}
+
+router.get("/arb/:pairId/live", async (req, res): Promise<void> => {
+  const { pairId } = req.params;
+  const pair = PAIRS[pairId];
+  if (!pair) {
+    res.status(404).json({ error: "Pair not found" });
+    return;
+  }
+
+  const now = Date.now();
+  const last = liveLastCallAt.get(pairId) ?? 0;
+  if (now - last < LIVE_RATE_LIMIT_MS) {
+    const retryAfter = Math.ceil((LIVE_RATE_LIMIT_MS - (now - last)) / 1000);
+    res.setHeader("Retry-After", String(retryAfter));
+    res.status(429).json({ error: `Rate limited — try again in ${retryAfter}s` });
+    return;
+  }
+  liveLastCallAt.set(pairId, now);
+
+  try {
+    const [bmexBookRaw, hlBook, bmexAPR, hlAPR, bmexInstrument] = await Promise.all([
+      fetchBitmexOrderbookTop(pair.bitmex),
+      fetchHyperliquidOrderbookTop(pair.hl),
+      fetchBitmexLatestFundingAPR(pair.bitmex),
+      fetchHyperliquidLatestFundingAPR(pair.hl),
+      fetchBitmexInstrument(pair.bitmex),
+    ]);
+    const bmexBook = normalizeBookSizes(bmexBookRaw, bmexInstrument?.underlyingToPositionMultiplier ?? 1);
+    res.json({
+      pairId,
+      name: pair.name,
+      bitmexSymbol: pair.bitmex,
+      hlSymbol: pair.hl,
+      bitmexCurrentAPR: parseFloat(bmexAPR.toFixed(4)),
+      hlCurrentAPR: parseFloat(hlAPR.toFixed(4)),
+      bmexBids: bmexBook?.bids ?? null,
+      bmexAsks: bmexBook?.asks ?? null,
+      hlBids: hlBook?.bids ?? null,
+      hlAsks: hlBook?.asks ?? null,
+      fetchedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    logger.error({ pairId, err }, "Error in live refresh");
+    res.status(500).json({ error: "Live refresh failed" });
+  }
+});
+
+// GET /api/arb/:pairId — reads one pair's detail from DB.
 router.get("/arb/:pairId", async (req, res): Promise<void> => {
   const { pairId } = req.params;
-
   if (!PAIRS[pairId]) {
     res.status(404).json({ error: "Pair not found" });
     return;
   }
 
   try {
-    const now = Date.now();
-    const cached = detailCache.get(pairId);
-
-    if (cached && now - cached.cachedAt < CACHE_TTL_MS) {
-      res.json(cached.data);
+    const rows = await db.select().from(pairSnapshots).where(eq(pairSnapshots.pairId, pairId));
+    if (rows.length === 0) {
+      res.status(404).json({ error: "Pair not yet refreshed" });
       return;
     }
-
-    const detail = await buildPairDetail(pairId);
-    detailCache.set(pairId, { data: detail, cachedAt: now });
-    summaryCache.set(pairId, { data: detail.summary, cachedAt: now });
-
-    res.json(detail);
+    res.json(rows[0].data);
   } catch (err) {
-    logger.error({ err, pairId }, "Error fetching arb detail");
+    logger.error({ err, pairId }, "Error reading pair detail from DB");
     res.status(500).json({ error: "Failed to fetch detail data" });
   }
 });

@@ -25,6 +25,13 @@ export const ArbPairSummarySuggestion = {
   NEUTRAL: "NEUTRAL",
 } as const;
 
+export interface BookLevel {
+  /** Price at this level */
+  px: number;
+  /** Size at this level in base-coin units */
+  size: number;
+}
+
 export interface ArbPairSummary {
   pairId: string;
   name: string;
@@ -60,6 +67,58 @@ export interface ArbPairSummary {
   suggestion: ArbPairSummarySuggestion;
   /** ISO timestamp of last data refresh */
   lastUpdated: string;
+  /** BitMEX best bid price; null if orderbook fetch failed */
+  bmexBid?: number | null;
+  /** BitMEX best ask price; null if orderbook fetch failed */
+  bmexAsk?: number | null;
+  /** Hyperliquid best bid price; null if orderbook fetch failed */
+  hlBid?: number | null;
+  /** Hyperliquid best ask price; null if orderbook fetch failed */
+  hlAsk?: number | null;
+  /** BitMEX size at best bid, in base-coin units. Multiply by bmexBid for USD notional. Null if orderbook fetch failed. */
+  bmexBidSize?: number | null;
+  /** BitMEX size at best ask, in base-coin units. Multiply by bmexAsk for USD notional. Null if orderbook fetch failed. */
+  bmexAskSize?: number | null;
+  /** Hyperliquid size at best bid, in base coin units. Null if orderbook fetch failed. */
+  hlBidSize?: number | null;
+  /** Hyperliquid size at best ask, in base coin units. Null if orderbook fetch failed. */
+  hlAskSize?: number | null;
+  /** BitMEX top-5 bid levels (highest first). Null if orderbook fetch failed. */
+  bmexBids?: BookLevel[] | null;
+  /** BitMEX top-5 ask levels (lowest first). Null if orderbook fetch failed. */
+  bmexAsks?: BookLevel[] | null;
+  /** Hyperliquid top-5 bid levels (highest first). Null if orderbook fetch failed. */
+  hlBids?: BookLevel[] | null;
+  /** Hyperliquid top-5 ask levels (lowest first). Null if orderbook fetch failed. */
+  hlAsks?: BookLevel[] | null;
+  /** Round-trip bid-ask crossing cost as sum of both venues' own-mid spreads (%). Null if orderbook missing. */
+  crossingCostPct?: number | null;
+  /** Round-trip taker fee cost as % (4 legs total). Constant per deployment. */
+  feeCostPct: number;
+  /** Current price basis (BMEX mid − HL mid) as % of avg mid. Signed: positive = BMEX pricier.
+Null when pair is scale-mismatched (e.g. SPY ETF vs SP500 index) — the raw basis has no economic meaning there.
+ */
+  priceBasisPct?: number | null;
+  /** Basis in the trade's favor for the suggested direction (%). Positive means the current entry
+price gap works for the trade; negative means it works against. Null for scale-mismatched pairs
+or NEUTRAL suggestions (no basis adjustment applied to totalCost in those cases).
+ */
+  favorableBasisPct?: number | null;
+  /** Effective round-trip cost: crossingCostPct + feeCostPct − favorableBasisPct.
+Assumes the basis closes to zero at exit (correlated with funding normalization — the thesis of a funding-arb trade).
+Can be negative when favorable basis exceeds crossing+fees (net credit at entry). Null if orderbook missing.
+ */
+  totalCostPct?: number | null;
+  /** Forward-looking net APR assuming a 1-day hold:
+|funding spread APR| − totalCostPct × 365. Pessimistic; useful as an "actionable now" filter.
+ */
+  netAPR1d?: number | null;
+  /** Same as netAPR1d but amortized over a 7-day hold. */
+  netAPR7d?: number | null;
+  /** Same as netAPR1d but amortized over a 30-day hold. */
+  netAPR30d?: number | null;
+  /** Hours needed at the current funding spread to recover totalCostPct. Null if spread is zero or cost missing. */
+  breakevenHours?: number | null;
 }
 
 export interface ArbSummaryResponse {
@@ -82,4 +141,22 @@ export interface ArbTimeSeriesPoint {
 export interface ArbDetailResponse {
   summary: ArbPairSummary;
   timeSeries: ArbTimeSeriesPoint[];
+}
+
+/**
+ * Live on-demand snapshot (orderbooks + current funding) for one pair. Not persisted.
+ */
+export interface ArbLiveResponse {
+  pairId: string;
+  name: string;
+  bitmexSymbol: string;
+  hlSymbol: string;
+  bitmexCurrentAPR: number;
+  hlCurrentAPR: number;
+  bmexBids?: BookLevel[] | null;
+  bmexAsks?: BookLevel[] | null;
+  hlBids?: BookLevel[] | null;
+  hlAsks?: BookLevel[] | null;
+  /** ISO timestamp when the live fetch completed */
+  fetchedAt: string;
 }

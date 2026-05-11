@@ -29,8 +29,31 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 ## Key API Endpoints
 
 - `GET /api/healthz` — Health check
-- `GET /api/arb/summary` — Current funding rates + suggestions for all 9 pairs (5-min cache)
-- `GET /api/arb/:pairId` — 14-day time-series data for a specific pair (5-min cache)
+- `GET /api/arb/summary` — Current funding rates + suggestions for all 22 pairs. Served from `pair_snapshots` table in Postgres; always instant. Returns `{ pairs: [], status: "bootstrapping" }` before the first refresh has populated the DB.
+- `GET /api/arb/:pairId` — 30-day time-series data for a specific pair. Served from DB; 404 if that pair hasn't been refreshed yet.
+- `GET /api/arb/refresh` — Heavy fetch + UPSERT of all pair snapshots. Requires `Authorization: Bearer ${CRON_SECRET}` header. Called by Vercel Cron every 10 minutes; returns `{ refreshed, failed, durationMs }`.
+
+## Required env vars
+
+- `DATABASE_URL` — Postgres connection string (Neon recommended; it works both locally and on Vercel with one URL)
+- `CRON_SECRET` — shared secret for the refresh endpoint. Generate with `openssl rand -hex 32`. Vercel Cron auto-sends this as `Authorization: Bearer ${CRON_SECRET}` when the env var is set on the project.
+
+## First-time setup / bootstrap
+
+```bash
+# 1. Create the pair_snapshots table
+pnpm --filter @workspace/db run push
+
+# 2. Start the API server
+pnpm --filter @workspace/api-server run dev
+
+# 3. Populate the DB (one-off; subsequent refreshes run on cron every 10 min)
+curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/arb/refresh
+# Takes ~3 min on first run. Returns { refreshed: [...22 ids], failed: [], durationMs }.
+
+# 4. Verify
+curl http://localhost:3000/api/arb/summary | jq '.pairs | length'   # → 22
+```
 
 ## External APIs Used
 
