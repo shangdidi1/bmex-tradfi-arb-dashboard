@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useGetArbSummary, useGetArbDetail, getArbLive, getArbSummaryLive, getGetArbSummaryQueryKey, getGetArbDetailQueryKey } from "@workspace/api-client-react";
+import { useGetArbSummary, useGetArbDetail, getArbLive, getArbSummaryLive, createArbPair, deleteArbPair, getGetArbSummaryQueryKey, getGetArbDetailQueryKey } from "@workspace/api-client-react";
 import type { ArbPairSummary, ArbLiveResponse, BookLevel } from "@workspace/api-client-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Area, ReferenceLine
 } from "recharts";
@@ -17,7 +18,7 @@ import {
   type SortingState,
 } from "@tanstack/react-table";
 import { Badge } from "@/components/ui/badge";
-import { RefreshCw, TrendingUp, AlertTriangle, Info, X } from "lucide-react";
+import { RefreshCw, TrendingUp, AlertTriangle, Info, X, Plus, Trash2 } from "lucide-react";
 import { format } from "date-fns";
 
 const CHART_COLORS = {
@@ -317,6 +318,40 @@ export default function Dashboard() {
     }
   };
 
+  // Add Pair modal state.
+  const [addOpen, setAddOpen] = useState(false);
+  const [addName, setAddName] = useState("");
+  const [addBmex, setAddBmex] = useState("");
+  const [addHl, setAddHl] = useState("");
+  const [addSubmitting, setAddSubmitting] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
+  const resetAddForm = () => { setAddName(""); setAddBmex(""); setAddHl(""); setAddError(null); };
+  const onAddSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (addSubmitting) return;
+    setAddError(null);
+    const name = addName.trim();
+    const bitmexSymbol = addBmex.trim().toUpperCase();
+    const hlSymbol = addHl.trim();
+    if (!name || !bitmexSymbol || !hlSymbol) {
+      setAddError("All three fields are required.");
+      return;
+    }
+    setAddSubmitting(true);
+    try {
+      await createArbPair({ name, bitmexSymbol, hlSymbol });
+      // Refresh summary so the new pair appears (in bootstrapping state initially).
+      await queryClient.invalidateQueries({ queryKey: getGetArbSummaryQueryKey() });
+      setAddOpen(false);
+      resetAddForm();
+    } catch (err) {
+      const data = (err as { data?: { error?: string } } | undefined)?.data;
+      setAddError(data?.error ?? (err instanceof Error ? err.message : "Failed to add pair"));
+    } finally {
+      setAddSubmitting(false);
+    }
+  };
+
   const [selectedPairId, setSelectedPairId] = useState<string | null>(null);
 
   const [sorting, setSorting] = useState<SortingState>([
@@ -518,10 +553,18 @@ export default function Dashboard() {
             <div className="flex items-center gap-3">
               <span className="text-xs text-gray-500">Cron every 10 min · click to force-refresh now</span>
               <button
+                onClick={() => setAddOpen(true)}
+                className="flex items-center gap-1 px-3 py-1.5 h-[32px] rounded border border-gray-700 bg-gray-800 text-sm hover:bg-gray-700 transition-colors text-gray-300"
+                title="Add a new trading pair (e.g. EWY / EWYUSDT / xyz:EWY). Pair appears immediately and fills in with data within ~1 min."
+              >
+                <Plus className="w-4 h-4" />
+                Add pair
+              </button>
+              <button
                 onClick={onRefreshLive}
                 disabled={refreshLive}
                 className="flex items-center gap-1 px-3 py-1.5 h-[32px] rounded border border-gray-700 bg-gray-800 text-sm hover:bg-gray-700 transition-colors disabled:opacity-50 text-gray-300"
-                title="Fan out live fetches across all pairs (orderbooks + current funding). Takes ~3 seconds. Rate-limited to one call every 15s server-wide."
+                title="Fan out live fetches across all pairs (orderbooks + current funding). Takes ~10s. Rate-limited to one call every 15s server-wide."
               >
                 <RefreshCw className={`w-4 h-4 ${refreshLive ? "animate-spin" : ""}`} />
                 {refreshLive ? "Refreshing…" : "Refresh all"}
@@ -624,6 +667,76 @@ export default function Dashboard() {
 
       </div>
 
+      {/* Add Pair Modal */}
+      <Dialog open={addOpen} onOpenChange={(o) => { setAddOpen(o); if (!o) resetAddForm(); }}>
+        <DialogContent className="bg-[#1a1f2e] border-gray-800 text-gray-100">
+          <DialogHeader>
+            <DialogTitle>Add trading pair</DialogTitle>
+            <DialogDescription className="text-gray-400">
+              Symbols are validated against both venues before the pair is saved. Initial 30-day history fills in within ~1 min.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={onAddSubmit} className="space-y-3">
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">Display name</label>
+              <input
+                value={addName}
+                onChange={(e) => setAddName(e.target.value)}
+                placeholder="e.g. South Korea (EWY)"
+                maxLength={80}
+                className="w-full px-3 py-2 rounded bg-[#0f111a] border border-gray-700 text-sm focus:outline-none focus:border-gray-500"
+                autoFocus
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs text-gray-400 block mb-1">BitMEX symbol</label>
+                <input
+                  value={addBmex}
+                  onChange={(e) => setAddBmex(e.target.value)}
+                  placeholder="EWYUSDT"
+                  maxLength={40}
+                  className="w-full px-3 py-2 rounded bg-[#0f111a] border border-gray-700 text-sm font-mono focus:outline-none focus:border-gray-500"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 block mb-1">Hyperliquid symbol</label>
+                <input
+                  value={addHl}
+                  onChange={(e) => setAddHl(e.target.value)}
+                  placeholder="xyz:EWY"
+                  maxLength={40}
+                  className="w-full px-3 py-2 rounded bg-[#0f111a] border border-gray-700 text-sm font-mono focus:outline-none focus:border-gray-500"
+                />
+              </div>
+            </div>
+            {addError && (
+              <p className="text-xs text-red-400 flex items-start gap-1.5">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                {addError}
+              </p>
+            )}
+            <DialogFooter className="gap-2">
+              <button
+                type="button"
+                onClick={() => setAddOpen(false)}
+                disabled={addSubmitting}
+                className="px-3 py-1.5 rounded border border-gray-700 bg-gray-800 text-sm hover:bg-gray-700 text-gray-300 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={addSubmitting}
+                className="px-3 py-1.5 rounded border border-[#FF6D00]/50 bg-[#FF6D00]/10 text-sm hover:bg-[#FF6D00]/20 text-[#FF6D00] font-medium disabled:opacity-50"
+              >
+                {addSubmitting ? "Adding…" : "Add pair"}
+              </button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
       {/* Detail View Slide-over */}
       {selectedPairId && (
         <DetailView
@@ -637,6 +750,7 @@ export default function Dashboard() {
 }
 
 function DetailView({ pairId, onClose, summary }: { pairId: string, onClose: () => void, summary?: ArbPairSummary }) {
+  const queryClient = useQueryClient();
   const { data, isLoading, isFetching } = useGetArbDetail(pairId, {
     query: {
       enabled: !!pairId,
@@ -659,6 +773,22 @@ function DetailView({ pairId, onClose, summary }: { pairId: string, onClose: () 
     setLiveData(null);
     setLiveError(null);
   }, [pairId]);
+
+  const [deleting, setDeleting] = useState(false);
+  const onDeletePair = async () => {
+    if (deleting) return;
+    if (!confirm(`Remove ${detailSummary?.name ?? `pair ${pairId}`}? This deletes the pair and all its cached data.`)) return;
+    setDeleting(true);
+    try {
+      await deleteArbPair(pairId);
+      await queryClient.invalidateQueries({ queryKey: getGetArbSummaryQueryKey() });
+      onClose();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Delete failed";
+      alert(msg);
+      setDeleting(false);
+    }
+  };
 
   const onRefreshPair = async () => {
     if (liveLoading) return;
@@ -713,9 +843,20 @@ function DetailView({ pairId, onClose, summary }: { pairId: string, onClose: () 
               <span><span className="text-[#2962FF] font-medium">HL:</span> {detailSummary?.hlSymbol}</span>
             </div>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-gray-800 rounded-full text-gray-400 hover:text-gray-100 transition-colors">
-            <X className="w-6 h-6" />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={onDeletePair}
+              disabled={deleting}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded border border-red-500/30 bg-red-500/5 text-xs text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50"
+              title="Remove this pair. Deletes it from the tracking list and all cached data."
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              {deleting ? "Removing…" : "Remove"}
+            </button>
+            <button onClick={onClose} className="p-2 hover:bg-gray-800 rounded-full text-gray-400 hover:text-gray-100 transition-colors">
+              <X className="w-6 h-6" />
+            </button>
+          </div>
         </div>
 
         {/* Content */}

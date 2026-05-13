@@ -5,10 +5,13 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import type {
+  MutationFunction,
   QueryFunction,
   QueryKey,
+  UseMutationOptions,
+  UseMutationResult,
   UseQueryOptions,
   UseQueryResult,
 } from "@tanstack/react-query";
@@ -16,13 +19,15 @@ import type {
 import type {
   ArbDetailResponse,
   ArbLiveResponse,
+  ArbPairConfig,
   ArbSummaryResponse,
+  CreateArbPairRequest,
   ErrorResponse,
   HealthStatus,
 } from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
-import type { ErrorType } from "../custom-fetch";
+import type { ErrorType, BodyType } from "../custom-fetch";
 
 type AwaitedInput<T> = PromiseLike<T> | T;
 
@@ -268,6 +273,185 @@ export function useGetArbDetail<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * Adds a new (BitMEX, Hyperliquid) pair for tracking. Symbols are validated
+against each venue's orderbook before insert. Initial 30-day history fetch
+runs asynchronously — the pair appears in /summary in a "bootstrapping"
+state until the background job completes (~30-90s).
+
+No auth (self-hosted tool). Abuse guards: 30s cooldown between adds,
+max 100 pairs total, symbols must resolve on both venues.
+
+ * @summary Add a new trading pair
+ */
+export const getCreateArbPairUrl = () => {
+  return `/api/arb/pairs`;
+};
+
+export const createArbPair = async (
+  createArbPairRequest: CreateArbPairRequest,
+  options?: RequestInit,
+): Promise<ArbPairConfig> => {
+  return customFetch<ArbPairConfig>(getCreateArbPairUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(createArbPairRequest),
+  });
+};
+
+export const getCreateArbPairMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createArbPair>>,
+    TError,
+    { data: BodyType<CreateArbPairRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createArbPair>>,
+  TError,
+  { data: BodyType<CreateArbPairRequest> },
+  TContext
+> => {
+  const mutationKey = ["createArbPair"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createArbPair>>,
+    { data: BodyType<CreateArbPairRequest> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return createArbPair(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreateArbPairMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createArbPair>>
+>;
+export type CreateArbPairMutationBody = BodyType<CreateArbPairRequest>;
+export type CreateArbPairMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Add a new trading pair
+ */
+export const useCreateArbPair = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createArbPair>>,
+    TError,
+    { data: BodyType<CreateArbPairRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof createArbPair>>,
+  TError,
+  { data: BodyType<CreateArbPairRequest> },
+  TContext
+> => {
+  return useMutation(getCreateArbPairMutationOptions(options));
+};
+
+/**
+ * Deletes from both trading_pairs and any existing pair_snapshot.
+ * @summary Remove a trading pair
+ */
+export const getDeleteArbPairUrl = (pairId: string) => {
+  return `/api/arb/pairs/${pairId}`;
+};
+
+export const deleteArbPair = async (
+  pairId: string,
+  options?: RequestInit,
+): Promise<void> => {
+  return customFetch<void>(getDeleteArbPairUrl(pairId), {
+    ...options,
+    method: "DELETE",
+  });
+};
+
+export const getDeleteArbPairMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteArbPair>>,
+    TError,
+    { pairId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof deleteArbPair>>,
+  TError,
+  { pairId: string },
+  TContext
+> => {
+  const mutationKey = ["deleteArbPair"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof deleteArbPair>>,
+    { pairId: string }
+  > = (props) => {
+    const { pairId } = props ?? {};
+
+    return deleteArbPair(pairId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DeleteArbPairMutationResult = NonNullable<
+  Awaited<ReturnType<typeof deleteArbPair>>
+>;
+
+export type DeleteArbPairMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Remove a trading pair
+ */
+export const useDeleteArbPair = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteArbPair>>,
+    TError,
+    { pairId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof deleteArbPair>>,
+  TError,
+  { pairId: string },
+  TContext
+> => {
+  return useMutation(getDeleteArbPairMutationOptions(options));
+};
 
 /**
  * Re-fetches orderbooks + current funding for all 22 pairs in parallel and recomputes

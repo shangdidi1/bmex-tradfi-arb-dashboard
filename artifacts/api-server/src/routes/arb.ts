@@ -1,16 +1,20 @@
 import { Router, type IRouter } from "express";
-import { db, pairSnapshots } from "@workspace/db";
+import { db, pairSnapshots, tradingPairs } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
 
 type PairDetail = { summary: PairSummary; timeSeries: TimeSeriesPoint[] };
+type PairConfig = { name: string; bitmex: string; hl: string };
 
 const DAYS_LOOKBACK = 30;
 const BITMEX_INTERVALS_PER_DAY = 3;
 
-const PAIRS: Record<string, { name: string; bitmex: string; hl: string }> = {
+// Default pair set seeded into the trading_pairs table on first server start
+// if the table is empty. After seeding, this list is no longer authoritative —
+// the table is. Users can add/remove via POST/DELETE /api/arb/pairs.
+const DEFAULT_PAIRS: Record<string, PairConfig> = {
   "1": { name: "WTI Crude Oil", bitmex: "WTIUSDT", hl: "xyz:CL" },
   "2": { name: "Brent Crude Oil", bitmex: "BRENTUSDT", hl: "xyz:BRENTOIL" },
   "3": { name: "CRCL (Circle)", bitmex: "CRCLUSDT", hl: "xyz:CRCL" },
@@ -34,6 +38,34 @@ const PAIRS: Record<string, { name: string; bitmex: string; hl: string }> = {
   "21": { name: "Netflix", bitmex: "NFLXUSDT", hl: "xyz:NFLX" },
   "22": { name: "EUR/USD", bitmex: "EURUSD", hl: "xyz:EUR" },
 };
+
+// Dynamic pair list, loaded from trading_pairs on first access and invalidated
+// on every mutation. Used instead of a hardcoded dict across all endpoints.
+let pairsCache: Record<string, PairConfig> | null = null;
+async function loadPairs(): Promise<Record<string, PairConfig>> {
+  if (pairsCache) return pairsCache;
+  const rows = await db.select().from(tradingPairs);
+  if (rows.length === 0) {
+    // First run — seed defaults.
+    logger.info({ count: Object.keys(DEFAULT_PAIRS).length }, "Seeding trading_pairs with defaults");
+    await db.insert(tradingPairs).values(
+      Object.entries(DEFAULT_PAIRS).map(([pairId, p]) => ({
+        pairId,
+        name: p.name,
+        bitmexSymbol: p.bitmex,
+        hlSymbol: p.hl,
+      })),
+    );
+    pairsCache = { ...DEFAULT_PAIRS };
+    return pairsCache;
+  }
+  pairsCache = {};
+  for (const row of rows) {
+    pairsCache[row.pairId] = { name: row.name, bitmex: row.bitmexSymbol, hl: row.hlSymbol };
+  }
+  return pairsCache;
+}
+function invalidatePairsCache() { pairsCache = null; }
 
 interface TimeSeriesPoint {
   timestamp: string;
@@ -667,7 +699,8 @@ function computeSummary(
 }
 
 async function buildPairDetail(pairId: string): Promise<{ summary: PairSummary; timeSeries: TimeSeriesPoint[] }> {
-  const pair = PAIRS[pairId];
+  const pairs = await loadPairs();
+  const pair = pairs[pairId];
   if (!pair) throw new Error("Pair not found");
 
   logger.info({ pairId, symbol: pair.bitmex }, "Fetching detail data for pair");
@@ -741,7 +774,8 @@ router.get("/arb/refresh", async (req, res): Promise<void> => {
   const startedAt = Date.now();
   const refreshed: string[] = [];
   const failed: string[] = [];
-  const pairIds = Object.keys(PAIRS);
+  const pairs = await loadPairs();
+  const pairIds = Object.keys(pairs);
   const BATCH_SIZE = 3;
 
   for (let i = 0; i < pairIds.length; i += BATCH_SIZE) {
@@ -828,10 +862,10 @@ router.get("/arb/summary/live", async (_req, res): Promise<void> => {
 
     // Fan out fresh fetches for every pair in parallel. Each pair's block calls:
     //   BMEX orderbook + HL orderbook + BMEX latest funding + HL latest funding + BMEX instrument.
-    // That's 22 × 5 = ~110 outbound calls, but the HL rate-limiter and BMEX's own
-    // capacity absorb them easily — completes in ~2-4 seconds wall time.
-    const results = await Promise.allSettled(Object.keys(PAIRS).map(async (pairId) => {
-      const pair = PAIRS[pairId];
+    // ~5 × N outbound calls; HL rate-limiter and BMEX's own capacity absorb them easily.
+    const pairConfigs = await loadPairs();
+    const results = await Promise.allSettled(Object.keys(pairConfigs).map(async (pairId) => {
+      const pair = pairConfigs[pairId];
       const prior = cached.get(pairId);
       if (!prior) return null;
 
@@ -908,7 +942,8 @@ async function fetchHyperliquidLatestFundingAPR(coin: string): Promise<number> {
 
 router.get("/arb/:pairId/live", async (req, res): Promise<void> => {
   const { pairId } = req.params;
-  const pair = PAIRS[pairId];
+  const pairs = await loadPairs();
+  const pair = pairs[pairId];
   if (!pair) {
     res.status(404).json({ error: "Pair not found" });
     return;
@@ -955,7 +990,8 @@ router.get("/arb/:pairId/live", async (req, res): Promise<void> => {
 // GET /api/arb/:pairId — reads one pair's detail from DB.
 router.get("/arb/:pairId", async (req, res): Promise<void> => {
   const { pairId } = req.params;
-  if (!PAIRS[pairId]) {
+  const pairs = await loadPairs();
+  if (!pairs[pairId]) {
     res.status(404).json({ error: "Pair not found" });
     return;
   }
@@ -970,6 +1006,128 @@ router.get("/arb/:pairId", async (req, res): Promise<void> => {
   } catch (err) {
     logger.error({ err, pairId }, "Error reading pair detail from DB");
     res.status(500).json({ error: "Failed to fetch detail data" });
+  }
+});
+
+// POST /api/arb/pairs — add a new trading pair dynamically.
+// Body: { name, bitmexSymbol, hlSymbol }. Symbols are validated by attempting an
+// orderbook fetch on each venue; if either fails, the pair is rejected.
+// Returns 201 with the created pair. The initial 30-day history fetch runs
+// asynchronously in the background; the pair appears in /summary in
+// "bootstrapping" state until that completes (~30-90s) and fully populates
+// on the next cron tick.
+//
+// Abuse guards (no auth by design):
+//   - Global 30s cooldown between adds
+//   - Max 100 pairs total
+//   - Symbols must resolve to real orderbooks on both venues
+const ADD_PAIR_COOLDOWN_MS = 30_000;
+const MAX_PAIRS = 100;
+let addPairLastAt = 0;
+
+router.post("/arb/pairs", async (req, res): Promise<void> => {
+  const now = Date.now();
+  if (now - addPairLastAt < ADD_PAIR_COOLDOWN_MS) {
+    const retryAfter = Math.ceil((ADD_PAIR_COOLDOWN_MS - (now - addPairLastAt)) / 1000);
+    res.setHeader("Retry-After", String(retryAfter));
+    res.status(429).json({ error: `Too many pair adds — try again in ${retryAfter}s` });
+    return;
+  }
+
+  const body = req.body as { name?: unknown; bitmexSymbol?: unknown; hlSymbol?: unknown };
+  const name = typeof body.name === "string" ? body.name.trim() : "";
+  const bitmexSymbol = typeof body.bitmexSymbol === "string" ? body.bitmexSymbol.trim() : "";
+  const hlSymbol = typeof body.hlSymbol === "string" ? body.hlSymbol.trim() : "";
+  if (!name || !bitmexSymbol || !hlSymbol) {
+    res.status(400).json({ error: "name, bitmexSymbol, and hlSymbol are required strings" });
+    return;
+  }
+  if (name.length > 80 || bitmexSymbol.length > 40 || hlSymbol.length > 40) {
+    res.status(400).json({ error: "Fields too long" });
+    return;
+  }
+
+  const pairs = await loadPairs();
+  if (Object.keys(pairs).length >= MAX_PAIRS) {
+    res.status(400).json({ error: `Pair cap reached (${MAX_PAIRS})` });
+    return;
+  }
+  for (const existing of Object.values(pairs)) {
+    if (existing.bitmex === bitmexSymbol && existing.hl === hlSymbol) {
+      res.status(409).json({ error: "Pair with this BitMEX + HL symbol pair already exists" });
+      return;
+    }
+  }
+
+  // Validate symbols exist on both venues before committing to DB.
+  const [bmexBook, hlBook] = await Promise.all([
+    fetchBitmexOrderbookTop(bitmexSymbol),
+    fetchHyperliquidOrderbookTop(hlSymbol),
+  ]);
+  if (!bmexBook) {
+    res.status(400).json({ error: `BitMEX symbol "${bitmexSymbol}" not found or has no orderbook` });
+    return;
+  }
+  if (!hlBook) {
+    res.status(400).json({ error: `Hyperliquid symbol "${hlSymbol}" not found or has no orderbook` });
+    return;
+  }
+
+  // Assign next pairId as max-existing + 1 (numeric).
+  const nextId = String(
+    Object.keys(pairs).reduce((max, id) => {
+      const n = parseInt(id, 10);
+      return Number.isFinite(n) && n > max ? n : max;
+    }, 0) + 1,
+  );
+
+  addPairLastAt = now;
+  try {
+    await db.insert(tradingPairs).values({ pairId: nextId, name, bitmexSymbol, hlSymbol });
+    invalidatePairsCache();
+  } catch (err) {
+    logger.error({ err, nextId }, "Failed to insert trading pair");
+    res.status(500).json({ error: "Failed to create pair" });
+    return;
+  }
+
+  // Fire-and-forget initial history fetch so the pair fills in within ~30-90s.
+  void (async () => {
+    try {
+      const detail = await buildPairDetail(nextId);
+      await db
+        .insert(pairSnapshots)
+        .values({ pairId: nextId, data: detail, fetchedAt: new Date() })
+        .onConflictDoUpdate({
+          target: pairSnapshots.pairId,
+          set: { data: detail, fetchedAt: new Date() },
+        });
+      logger.info({ pairId: nextId, name }, "Background bootstrap complete for new pair");
+    } catch (err) {
+      logger.error({ err, pairId: nextId }, "Background bootstrap failed for new pair");
+    }
+  })();
+
+  res.status(201).json({ pairId: nextId, name, bitmexSymbol, hlSymbol });
+});
+
+// DELETE /api/arb/pairs/:pairId — remove a pair.
+// Deletes from both trading_pairs and any existing pair_snapshot row.
+router.delete("/arb/pairs/:pairId", async (req, res): Promise<void> => {
+  const { pairId } = req.params;
+  const pairs = await loadPairs();
+  if (!pairs[pairId]) {
+    res.status(404).json({ error: "Pair not found" });
+    return;
+  }
+  try {
+    await db.delete(pairSnapshots).where(eq(pairSnapshots.pairId, pairId));
+    await db.delete(tradingPairs).where(eq(tradingPairs.pairId, pairId));
+    invalidatePairsCache();
+    res.status(204).end();
+  } catch (err) {
+    logger.error({ err, pairId }, "Failed to delete pair");
+    res.status(500).json({ error: "Failed to delete pair" });
   }
 });
 

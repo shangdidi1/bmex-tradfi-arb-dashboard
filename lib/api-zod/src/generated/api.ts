@@ -437,6 +437,46 @@ export const GetArbDetailResponse = zod.object({
 });
 
 /**
+ * Adds a new (BitMEX, Hyperliquid) pair for tracking. Symbols are validated
+against each venue's orderbook before insert. Initial 30-day history fetch
+runs asynchronously — the pair appears in /summary in a "bootstrapping"
+state until the background job completes (~30-90s).
+
+No auth (self-hosted tool). Abuse guards: 30s cooldown between adds,
+max 100 pairs total, symbols must resolve on both venues.
+
+ * @summary Add a new trading pair
+ */
+export const createArbPairBodyNameMax = 80;
+
+export const createArbPairBodyBitmexSymbolMax = 40;
+
+export const createArbPairBodyHlSymbolMax = 40;
+
+export const CreateArbPairBody = zod.object({
+  name: zod
+    .string()
+    .max(createArbPairBodyNameMax)
+    .describe('Display name for the pair, e.g. \"South Korea (EWY)\"'),
+  bitmexSymbol: zod
+    .string()
+    .max(createArbPairBodyBitmexSymbolMax)
+    .describe('BitMEX symbol, e.g. \"EWYUSDT\"'),
+  hlSymbol: zod
+    .string()
+    .max(createArbPairBodyHlSymbolMax)
+    .describe('Hyperliquid symbol, e.g. \"xyz:EWY\"'),
+});
+
+/**
+ * Deletes from both trading_pairs and any existing pair_snapshot.
+ * @summary Remove a trading pair
+ */
+export const DeleteArbPairParams = zod.object({
+  pairId: zod.coerce.string(),
+});
+
+/**
  * Re-fetches orderbooks + current funding for all 22 pairs in parallel and recomputes
 summaries, returning the same shape as /arb/summary. Historical metrics (consistency,
 annYield, timeSeries) are carried over from the last cron refresh — this endpoint

@@ -8,10 +8,12 @@
 
 export * from "./arbDetailResponse";
 export * from "./arbLiveResponse";
+export * from "./arbPairConfig";
 export * from "./arbPairSummary";
 export * from "./arbPairSummarySuggestion";
 export * from "./arbSummaryResponse";
 export * from "./arbTimeSeriesPoint";
 export * from "./bookLevel";
+export * from "./createArbPairRequest";
 export * from "./errorResponse";
 export * from "./healthStatus";

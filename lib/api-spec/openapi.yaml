@@ -67,6 +67,73 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /arb/pairs:
+    post:
+      operationId: createArbPair
+      tags: [arb]
+      summary: Add a new trading pair
+      description: |
+        Adds a new (BitMEX, Hyperliquid) pair for tracking. Symbols are validated
+        against each venue's orderbook before insert. Initial 30-day history fetch
+        runs asynchronously — the pair appears in /summary in a "bootstrapping"
+        state until the background job completes (~30-90s).
+
+        No auth (self-hosted tool). Abuse guards: 30s cooldown between adds,
+        max 100 pairs total, symbols must resolve on both venues.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateArbPairRequest"
+      responses:
+        "201":
+          description: Pair created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArbPairConfig"
+        "400":
+          description: Invalid input or symbol not found on venue
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Pair with these symbols already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          description: Cooldown — try again in a few seconds
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /arb/pairs/{pairId}:
+    delete:
+      operationId: deleteArbPair
+      tags: [arb]
+      summary: Remove a trading pair
+      description: Deletes from both trading_pairs and any existing pair_snapshot.
+      parameters:
+        - name: pairId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Pair deleted
+        "404":
+          description: Pair not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /arb/summary/live:
     get:
       operationId: getArbSummaryLive
@@ -375,6 +442,44 @@ components:
       required:
         - summary
         - timeSeries
+
+    CreateArbPairRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Display name for the pair, e.g. "South Korea (EWY)"
+          maxLength: 80
+        bitmexSymbol:
+          type: string
+          description: BitMEX symbol, e.g. "EWYUSDT"
+          maxLength: 40
+        hlSymbol:
+          type: string
+          description: Hyperliquid symbol, e.g. "xyz:EWY"
+          maxLength: 40
+      required:
+        - name
+        - bitmexSymbol
+        - hlSymbol
+
+    ArbPairConfig:
+      type: object
+      description: The pair's identity and venue symbols (not the market data — see ArbPairSummary for that).
+      properties:
+        pairId:
+          type: string
+        name:
+          type: string
+        bitmexSymbol:
+          type: string
+        hlSymbol:
+          type: string
+      required:
+        - pairId
+        - name
+        - bitmexSymbol
+        - hlSymbol
 
     BookLevel:
       type: object

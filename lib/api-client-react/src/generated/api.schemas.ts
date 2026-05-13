@@ -143,6 +143,34 @@ export interface ArbDetailResponse {
   timeSeries: ArbTimeSeriesPoint[];
 }
 
+export interface CreateArbPairRequest {
+  /**
+   * Display name for the pair, e.g. "South Korea (EWY)"
+   * @maxLength 80
+   */
+  name: string;
+  /**
+   * BitMEX symbol, e.g. "EWYUSDT"
+   * @maxLength 40
+   */
+  bitmexSymbol: string;
+  /**
+   * Hyperliquid symbol, e.g. "xyz:EWY"
+   * @maxLength 40
+   */
+  hlSymbol: string;
+}
+
+/**
+ * The pair's identity and venue symbols (not the market data — see ArbPairSummary for that).
+ */
+export interface ArbPairConfig {
+  pairId: string;
+  name: string;
+  bitmexSymbol: string;
+  hlSymbol: string;
+}
+
 /**
  * Live on-demand snapshot (orderbooks + current funding) for one pair. Not persisted.
  */
