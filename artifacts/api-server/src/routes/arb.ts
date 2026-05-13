@@ -1069,7 +1069,26 @@ router.post("/arb/pairs", async (req, res): Promise<void> => {
     return;
   }
   if (!hlBook) {
-    res.status(400).json({ error: `Hyperliquid symbol "${hlSymbol}" not found or has no orderbook` });
+    // If user likely entered a BitMEX-style or raw ticker, suggest the xyz: form.
+    // Strip common suffixes (USDC, USDT, -USDC, -USDT), uppercase, prefix xyz:.
+    let suggestion: string | null = null;
+    if (!hlSymbol.startsWith("xyz:")) {
+      const stripped = hlSymbol.toUpperCase().replace(/[-_]?(USDC|USDT|PERP|USD)$/, "");
+      if (stripped && stripped !== hlSymbol.toUpperCase()) {
+        suggestion = `xyz:${stripped}`;
+      } else if (stripped) {
+        suggestion = `xyz:${stripped}`;
+      }
+      // Probe the suggestion — only include it in the error if it actually resolves.
+      if (suggestion) {
+        const probe = await fetchHyperliquidOrderbookTop(suggestion);
+        if (!probe) suggestion = null;
+      }
+    }
+    const hint = suggestion
+      ? ` — did you mean "${suggestion}"? (Hyperliquid TradFi perps use the xyz: prefix.)`
+      : ` — Hyperliquid TradFi perps use the format xyz:TICKER (e.g. xyz:EWY).`;
+    res.status(400).json({ error: `Hyperliquid symbol "${hlSymbol}" not found${hint}` });
     return;
   }
 

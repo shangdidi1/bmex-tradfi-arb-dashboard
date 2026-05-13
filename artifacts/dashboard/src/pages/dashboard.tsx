@@ -698,6 +698,7 @@ export default function Dashboard() {
                   maxLength={40}
                   className="w-full px-3 py-2 rounded bg-[#0f111a] border border-gray-700 text-sm font-mono focus:outline-none focus:border-gray-500"
                 />
+                <p className="text-[10px] text-gray-500 mt-1">Format: TICKER + USDT · e.g. <code className="text-gray-400">EWYUSDT</code></p>
               </div>
               <div>
                 <label className="text-xs text-gray-400 block mb-1">Hyperliquid symbol</label>
@@ -708,6 +709,7 @@ export default function Dashboard() {
                   maxLength={40}
                   className="w-full px-3 py-2 rounded bg-[#0f111a] border border-gray-700 text-sm font-mono focus:outline-none focus:border-gray-500"
                 />
+                <p className="text-[10px] text-gray-500 mt-1">Format: <code className="text-gray-400">xyz:TICKER</code> · TradFi perps live on HL's xyz dex</p>
               </div>
             </div>
             {addError && (
