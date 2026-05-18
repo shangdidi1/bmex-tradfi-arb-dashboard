@@ -16,4 +16,48 @@ app.listen(port, (err) => {
   }
 
   logger.info({ port }, "Server listening");
+  startLocalScheduler(port);
 });
+
+// Local scheduler — keeps the time series fresh in long-running deployments
+// (Replit, bare VPS, local dev). On Vercel serverless, this is skipped because
+// (a) lambdas are ephemeral and intervals don't survive across invocations,
+// and (b) Vercel Cron already hits /api/arb/refresh every 10 min.
+//
+// On startup, fires one tick immediately if the last refresh is > 10 min old,
+// so coming back to a stale dev server self-heals. Then ticks every 10 min.
+function startLocalScheduler(port: number): void {
+  if (process.env["VERCEL"] || process.env["DISABLE_LOCAL_SCHEDULER"]) {
+    logger.info("Local scheduler disabled (VERCEL or DISABLE_LOCAL_SCHEDULER set)");
+    return;
+  }
+  const secret = process.env["CRON_SECRET"];
+  if (!secret) {
+    logger.warn("Local scheduler not started — CRON_SECRET unset");
+    return;
+  }
+
+  const intervalMs = 10 * 60 * 1000;
+  const tick = async (): Promise<void> => {
+    const startedAt = Date.now();
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/api/arb/refresh`, {
+        headers: { Authorization: `Bearer ${secret}` },
+      });
+      const ms = Date.now() - startedAt;
+      if (res.ok) {
+        logger.info({ ms }, "Local scheduler tick complete");
+      } else {
+        logger.warn({ status: res.status, ms }, "Local scheduler tick non-OK");
+      }
+    } catch (err) {
+      logger.error({ err }, "Local scheduler tick threw");
+    }
+  };
+
+  // Fire once on boot so a server resumed after days of inactivity catches up
+  // immediately. Wrapped in a delay so the listen() event loop is fully ready.
+  setTimeout(() => { void tick(); }, 2_000);
+  setInterval(() => { void tick(); }, intervalMs);
+  logger.info({ intervalMs }, "Local refresh scheduler started");
+}

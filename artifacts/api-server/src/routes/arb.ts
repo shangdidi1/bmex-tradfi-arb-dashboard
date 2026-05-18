@@ -144,7 +144,7 @@ function sleep(ms: number) {
 // ~1 heavy req/sec sustained, with burst tolerance). We serialize all HL request
 // starts through a single chain with a min interval, and retry 429s with
 // exponential backoff (respecting Retry-After when present).
-const HL_MIN_INTERVAL_MS = 250;
+const HL_MIN_INTERVAL_MS = 1100;
 const HL_MAX_RETRIES = 4;
 let hlLastStart = 0;
 let hlGate: Promise<void> = Promise.resolve();

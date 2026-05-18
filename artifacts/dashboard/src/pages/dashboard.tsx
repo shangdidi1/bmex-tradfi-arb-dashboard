@@ -534,6 +534,21 @@ export default function Dashboard() {
       })()
     : null;
 
+  // Stale banner: server-side cachedAt tells us when the underlying time series
+  // last refreshed (cron tick). If it's > 30 min, charts are stale and the
+  // "Refresh all" button (which only updates the current snapshot) won't fix it.
+  const cachedAt = data?.cachedAt ? new Date(data.cachedAt) : null;
+  const cachedAgeMs = cachedAt ? Date.now() - cachedAt.getTime() : null;
+  const isStale = cachedAgeMs !== null && cachedAgeMs > 30 * 60 * 1000;
+  const staleText = (() => {
+    if (!cachedAgeMs) return null;
+    const mins = Math.floor(cachedAgeMs / 60000);
+    if (mins < 60) return `${mins} min ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    return `${Math.floor(hrs / 24)}d ago`;
+  })();
+
   const loading = isLoading || isFetching;
 
   return (
@@ -577,6 +592,15 @@ export default function Dashboard() {
             ) : null}
           </div>
         </div>
+
+        {isStale && (
+          <div className="flex items-start gap-2 px-4 py-3 mb-4 rounded border border-amber-500/40 bg-amber-500/10 text-amber-300 text-sm">
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+            <div>
+              <strong>Time-series data is {staleText}.</strong> Charts and historical metrics won't reflect today's market until the cron rebuilds them. <span className="text-amber-200/70">"Refresh all" updates only current funding + orderbook; full history rebuild runs every 10 min via cron (or manually via /api/arb/refresh).</span>
+            </div>
+          </div>
+        )}
 
         {/* Global KPI Bar */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
