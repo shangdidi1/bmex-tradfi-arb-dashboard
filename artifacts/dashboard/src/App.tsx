@@ -5,6 +5,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 import Dashboard from "@/pages/dashboard";
 import BmexFunding from "@/pages/bmex-funding";
+import StrcDashboard from "@/pages/strc-dashboard";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -19,6 +20,7 @@ function Router() {
     <Switch>
       <Route path="/" component={Dashboard} />
       <Route path="/bmex-funding" component={BmexFunding} />
+      <Route path="/strc" component={StrcDashboard} />
       <Route component={NotFound} />
     </Switch>
   );

@@ -227,3 +227,36 @@ export interface BmexFundingSummaryResponse {
   /** ISO timestamp when the summary was built */
   fetchedAt: string;
 }
+
+export interface StrcPricePoint {
+  /** Trading date (UTC) */
+  date: string;
+  /** Daily close ($) */
+  close: number;
+}
+
+export interface StrcDividend {
+  /** Ex-dividend date */
+  exDivDate: string;
+  /** Dividend amount per share ($) */
+  amount: number;
+}
+
+export interface StrcSummaryResponse {
+  /** Yahoo Finance ticker (always "STRC") */
+  ticker: string;
+  /** Most recent daily close ($) */
+  lastClose: number;
+  /** Trading date of lastClose */
+  lastCloseDate: string;
+  /** Most recent dividend amount, or null if none on file */
+  lastDividend?: number | null;
+  /** Most recent ex-div date, or null if none on file */
+  lastExDivDate?: string | null;
+  /** Daily close history since STRC IPO (mid-2025) */
+  history: StrcPricePoint[];
+  /** All dividend events with their ex-dividend date and amount */
+  dividends: StrcDividend[];
+  /** Server-side timestamp of this Yahoo fetch */
+  fetchedAt: string;
+}

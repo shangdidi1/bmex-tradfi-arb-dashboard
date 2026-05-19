@@ -3,6 +3,7 @@ import { Link, useLocation } from "wouter";
 const TABS: Array<{ href: string; label: string }> = [
   { href: "/", label: "TradFi Arb" },
   { href: "/bmex-funding", label: "BMEX Funding Arb" },
+  { href: "/strc", label: "STRC Discount" },
 ];
 
 export default function TopNav() {

@@ -1,3 +1,4 @@
+import "dotenv/config";  // Load .env into process.env BEFORE anything imports @workspace/db
 import app from "./app";
 import { logger } from "./lib/logger";
 

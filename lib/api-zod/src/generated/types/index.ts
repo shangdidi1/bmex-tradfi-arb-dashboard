@@ -21,3 +21,6 @@ export * from "./bookLevel";
 export * from "./createArbPairRequest";
 export * from "./errorResponse";
 export * from "./healthStatus";
+export * from "./strcDividend";
+export * from "./strcPricePoint";
+export * from "./strcSummaryResponse";

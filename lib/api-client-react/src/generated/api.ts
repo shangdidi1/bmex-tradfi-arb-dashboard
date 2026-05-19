@@ -25,6 +25,7 @@ import type {
   CreateArbPairRequest,
   ErrorResponse,
   HealthStatus,
+  StrcSummaryResponse,
 } from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
@@ -703,6 +704,87 @@ export function useGetBmexFundingSummary<
   request?: SecondParameter<typeof customFetch>;
 }): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getGetBmexFundingSummaryQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Returns Strategy Inc 'Stretch' (STRC) full daily-close history and
+dividend events fetched from Yahoo Finance. STRC is a perpetual
+preferred with $100 par; the frontend uses this raw data to derive
+discount-to-par, post-ex-div fair value, historical sub-par
+opportunities, and the auto-detected dividend cadence.
+
+ * @summary STRC price + dividend summary
+ */
+export const getGetStrcSummaryUrl = () => {
+  return `/api/strc/summary`;
+};
+
+export const getStrcSummary = async (
+  options?: RequestInit,
+): Promise<StrcSummaryResponse> => {
+  return customFetch<StrcSummaryResponse>(getGetStrcSummaryUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetStrcSummaryQueryKey = () => {
+  return [`/api/strc/summary`] as const;
+};
+
+export const getGetStrcSummaryQueryOptions = <
+  TData = Awaited<ReturnType<typeof getStrcSummary>>,
+  TError = ErrorType<ErrorResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getStrcSummary>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetStrcSummaryQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getStrcSummary>>> = ({
+    signal,
+  }) => getStrcSummary({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getStrcSummary>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetStrcSummaryQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getStrcSummary>>
+>;
+export type GetStrcSummaryQueryError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary STRC price + dividend summary
+ */
+
+export function useGetStrcSummary<
+  TData = Awaited<ReturnType<typeof getStrcSummary>>,
+  TError = ErrorType<ErrorResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getStrcSummary>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetStrcSummaryQueryOptions(options);
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;

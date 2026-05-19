@@ -795,3 +795,45 @@ export const GetBmexFundingSummaryResponse = zod.object({
     .describe("Suggested trade direction; NEUTRAL when |spreadAPR| < 5"),
   fetchedAt: zod.string().describe("ISO timestamp when the summary was built"),
 });
+
+/**
+ * Returns Strategy Inc 'Stretch' (STRC) full daily-close history and
+dividend events fetched from Yahoo Finance. STRC is a perpetual
+preferred with $100 par; the frontend uses this raw data to derive
+discount-to-par, post-ex-div fair value, historical sub-par
+opportunities, and the auto-detected dividend cadence.
+
+ * @summary STRC price + dividend summary
+ */
+export const GetStrcSummaryResponse = zod.object({
+  ticker: zod.string().describe('Yahoo Finance ticker (always \"STRC\")'),
+  lastClose: zod.number().describe("Most recent daily close ($)"),
+  lastCloseDate: zod.coerce.date().describe("Trading date of lastClose"),
+  lastDividend: zod
+    .number()
+    .nullish()
+    .describe("Most recent dividend amount, or null if none on file"),
+  lastExDivDate: zod.coerce
+    .date()
+    .nullish()
+    .describe("Most recent ex-div date, or null if none on file"),
+  history: zod
+    .array(
+      zod.object({
+        date: zod.coerce.date().describe("Trading date (UTC)"),
+        close: zod.number().describe("Daily close ($)"),
+      }),
+    )
+    .describe("Daily close history since STRC IPO (mid-2025)"),
+  dividends: zod
+    .array(
+      zod.object({
+        exDivDate: zod.coerce.date().describe("Ex-dividend date"),
+        amount: zod.number().describe("Dividend amount per share ($)"),
+      }),
+    )
+    .describe("All dividend events with their ex-dividend date and amount"),
+  fetchedAt: zod.coerce
+    .date()
+    .describe("Server-side timestamp of this Yahoo fetch"),
+});
