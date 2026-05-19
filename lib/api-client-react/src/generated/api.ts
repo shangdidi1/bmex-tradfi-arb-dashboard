@@ -21,6 +21,7 @@ import type {
   ArbLiveResponse,
   ArbPairConfig,
   ArbSummaryResponse,
+  BmexFundingSummaryResponse,
   CreateArbPairRequest,
   ErrorResponse,
   HealthStatus,
@@ -618,6 +619,90 @@ export function useGetArbLive<
   },
 ): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getGetArbLiveQueryOptions(pairId, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Returns current funding APRs and 1-year history for BitMEX BTC-margined
+XBTUSD (inverse) and USDT-margined XBTUSDT (linear) perps, plus the
+spread and a suggested trade direction. With BitMEX multi-asset margin
+a trader can deposit USDT and harvest the funding-rate differential
+between the two perps in a near-delta-neutral position.
+
+ * @summary BitMEX-internal funding-rate arbitrage summary
+ */
+export const getGetBmexFundingSummaryUrl = () => {
+  return `/api/bmex-funding/summary`;
+};
+
+export const getBmexFundingSummary = async (
+  options?: RequestInit,
+): Promise<BmexFundingSummaryResponse> => {
+  return customFetch<BmexFundingSummaryResponse>(
+    getGetBmexFundingSummaryUrl(),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetBmexFundingSummaryQueryKey = () => {
+  return [`/api/bmex-funding/summary`] as const;
+};
+
+export const getGetBmexFundingSummaryQueryOptions = <
+  TData = Awaited<ReturnType<typeof getBmexFundingSummary>>,
+  TError = ErrorType<ErrorResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getBmexFundingSummary>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetBmexFundingSummaryQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getBmexFundingSummary>>
+  > = ({ signal }) => getBmexFundingSummary({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getBmexFundingSummary>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetBmexFundingSummaryQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getBmexFundingSummary>>
+>;
+export type GetBmexFundingSummaryQueryError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary BitMEX-internal funding-rate arbitrage summary
+ */
+
+export function useGetBmexFundingSummary<
+  TData = Awaited<ReturnType<typeof getBmexFundingSummary>>,
+  TError = ErrorType<ErrorResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getBmexFundingSummary>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetBmexFundingSummaryQueryOptions(options);
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;

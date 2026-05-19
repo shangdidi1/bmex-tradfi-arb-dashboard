@@ -20,6 +20,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { RefreshCw, TrendingUp, AlertTriangle, Info, X, Plus, Trash2 } from "lucide-react";
 import { format } from "date-fns";
+import TopNav from "@/components/top-nav";
 
 const CHART_COLORS = {
   bitmex: "#FF6D00",
@@ -554,6 +555,8 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen bg-[#0f111a] text-gray-200 px-5 py-4 pt-[32px] pb-[32px] pl-[24px] pr-[24px]">
       <div className="max-w-[1400px] mx-auto space-y-6">
+
+        <TopNav />
 
         {/* Header */}
         <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">

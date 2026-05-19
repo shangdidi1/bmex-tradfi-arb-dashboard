@@ -750,3 +750,48 @@ export const GetArbLiveResponse = zod
   .describe(
     "Live on-demand snapshot (orderbooks + current funding) for one pair. Not persisted.",
   );
+
+/**
+ * Returns current funding APRs and 1-year history for BitMEX BTC-margined
+XBTUSD (inverse) and USDT-margined XBTUSDT (linear) perps, plus the
+spread and a suggested trade direction. With BitMEX multi-asset margin
+a trader can deposit USDT and harvest the funding-rate differential
+between the two perps in a near-delta-neutral position.
+
+ * @summary BitMEX-internal funding-rate arbitrage summary
+ */
+export const GetBmexFundingSummaryResponse = zod.object({
+  btc: zod.object({
+    symbol: zod.string().describe("BitMEX symbol (XBTUSD or XBTUSDT)"),
+    currentAPR: zod.number().describe("Latest annualized funding rate (%)"),
+    history: zod
+      .array(
+        zod.object({
+          ts: zod.number().describe("Unix epoch ms of the funding settlement"),
+          apr: zod
+            .number()
+            .describe("Annualized funding rate at that point (%)"),
+        }),
+      )
+      .describe("1-year funding history (~1095 entries, every 8h)"),
+  }),
+  usdt: zod.object({
+    symbol: zod.string().describe("BitMEX symbol (XBTUSD or XBTUSDT)"),
+    currentAPR: zod.number().describe("Latest annualized funding rate (%)"),
+    history: zod
+      .array(
+        zod.object({
+          ts: zod.number().describe("Unix epoch ms of the funding settlement"),
+          apr: zod
+            .number()
+            .describe("Annualized funding rate at that point (%)"),
+        }),
+      )
+      .describe("1-year funding history (~1095 entries, every 8h)"),
+  }),
+  spreadAPR: zod.number().describe("btc.currentAPR minus usdt.currentAPR (%)"),
+  suggestion: zod
+    .enum(["SHORT_BTC_LONG_USDT", "LONG_BTC_SHORT_USDT", "NEUTRAL"])
+    .describe("Suggested trade direction; NEUTRAL when |spreadAPR| < 5"),
+  fetchedAt: zod.string().describe("ISO timestamp when the summary was built"),
+});

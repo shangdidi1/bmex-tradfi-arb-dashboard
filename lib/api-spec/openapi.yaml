@@ -12,6 +12,8 @@ tags:
     description: Health operations
   - name: arb
     description: Arbitrage analysis operations
+  - name: bmex-funding
+    description: BitMEX-internal funding-rate arbitrage (XBTUSD vs XBTUSDT)
 paths:
   /healthz:
     get:
@@ -190,6 +192,31 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "429":
           description: Rate limited — try again in a few seconds
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /bmex-funding/summary:
+    get:
+      operationId: getBmexFundingSummary
+      tags: [bmex-funding]
+      summary: BitMEX-internal funding-rate arbitrage summary
+      description: |
+        Returns current funding APRs and 1-year history for BitMEX BTC-margined
+        XBTUSD (inverse) and USDT-margined XBTUSDT (linear) perps, plus the
+        spread and a suggested trade direction. With BitMEX multi-asset margin
+        a trader can deposit USDT and harvest the funding-rate differential
+        between the two perps in a near-delta-neutral position.
+      responses:
+        "200":
+          description: Funding summary for both legs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BmexFundingSummaryResponse"
+        "500":
+          description: Upstream BitMEX call failed
           content:
             application/json:
               schema:
@@ -536,4 +563,63 @@ components:
         - hlSymbol
         - bitmexCurrentAPR
         - hlCurrentAPR
+        - fetchedAt
+
+    BmexFundingHistoryPoint:
+      type: object
+      properties:
+        ts:
+          type: integer
+          format: int64
+          description: Unix epoch ms of the funding settlement
+        apr:
+          type: number
+          description: Annualized funding rate at that point (%)
+      required:
+        - ts
+        - apr
+
+    BmexFundingLeg:
+      type: object
+      properties:
+        symbol:
+          type: string
+          description: BitMEX symbol (XBTUSD or XBTUSDT)
+        currentAPR:
+          type: number
+          description: Latest annualized funding rate (%)
+        history:
+          type: array
+          description: 1-year funding history (~1095 entries, every 8h)
+          items: { $ref: "#/components/schemas/BmexFundingHistoryPoint" }
+      required:
+        - symbol
+        - currentAPR
+        - history
+
+    BmexFundingSummaryResponse:
+      type: object
+      properties:
+        btc:
+          $ref: "#/components/schemas/BmexFundingLeg"
+        usdt:
+          $ref: "#/components/schemas/BmexFundingLeg"
+        spreadAPR:
+          type: number
+          description: btc.currentAPR minus usdt.currentAPR (%)
+        suggestion:
+          type: string
+          enum:
+            - SHORT_BTC_LONG_USDT
+            - LONG_BTC_SHORT_USDT
+            - NEUTRAL
+          description: Suggested trade direction; NEUTRAL when |spreadAPR| < 5
+        fetchedAt:
+          type: string
+          description: ISO timestamp when the summary was built
+      required:
+        - btc
+        - usdt
+        - spreadAPR
+        - suggestion
         - fetchedAt

@@ -188,3 +188,42 @@ export interface ArbLiveResponse {
   /** ISO timestamp when the live fetch completed */
   fetchedAt: string;
 }
+
+export interface BmexFundingHistoryPoint {
+  /** Unix epoch ms of the funding settlement */
+  ts: number;
+  /** Annualized funding rate at that point (%) */
+  apr: number;
+}
+
+export interface BmexFundingLeg {
+  /** BitMEX symbol (XBTUSD or XBTUSDT) */
+  symbol: string;
+  /** Latest annualized funding rate (%) */
+  currentAPR: number;
+  /** 1-year funding history (~1095 entries, every 8h) */
+  history: BmexFundingHistoryPoint[];
+}
+
+/**
+ * Suggested trade direction; NEUTRAL when |spreadAPR| < 5
+ */
+export type BmexFundingSummaryResponseSuggestion =
+  (typeof BmexFundingSummaryResponseSuggestion)[keyof typeof BmexFundingSummaryResponseSuggestion];
+
+export const BmexFundingSummaryResponseSuggestion = {
+  SHORT_BTC_LONG_USDT: "SHORT_BTC_LONG_USDT",
+  LONG_BTC_SHORT_USDT: "LONG_BTC_SHORT_USDT",
+  NEUTRAL: "NEUTRAL",
+} as const;
+
+export interface BmexFundingSummaryResponse {
+  btc: BmexFundingLeg;
+  usdt: BmexFundingLeg;
+  /** btc.currentAPR minus usdt.currentAPR (%) */
+  spreadAPR: number;
+  /** Suggested trade direction; NEUTRAL when |spreadAPR| < 5 */
+  suggestion: BmexFundingSummaryResponseSuggestion;
+  /** ISO timestamp when the summary was built */
+  fetchedAt: string;
+}

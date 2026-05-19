@@ -38,11 +38,26 @@ function startLocalScheduler(port: number): void {
   }
 
   const intervalMs = 10 * 60 * 1000;
+  // Single-flight guard: the full refresh can take ~9 min (21 HL pairs × 20
+  // 3-day chunks × 1.1s gate). Without this, every 10-min tick fires while
+  // the previous is still in flight, doubling the global HL queue each cycle
+  // and producing permanent backlog.
+  let inFlight = false;
   const tick = async (): Promise<void> => {
+    if (inFlight) {
+      logger.warn("Skipping local scheduler tick — previous refresh still in flight");
+      return;
+    }
+    inFlight = true;
     const startedAt = Date.now();
     try {
+      // Default Node fetch headersTimeout is 5 min, shorter than our refresh.
+      // Explicit 15-min budget covers a slow run + the BMEX/HL response
+      // tail without prematurely aborting (which used to leave the
+      // server-side handler running unsupervised).
       const res = await fetch(`http://127.0.0.1:${port}/api/arb/refresh`, {
         headers: { Authorization: `Bearer ${secret}` },
+        signal: AbortSignal.timeout(15 * 60 * 1000),
       });
       const ms = Date.now() - startedAt;
       if (res.ok) {
@@ -52,6 +67,8 @@ function startLocalScheduler(port: number): void {
       }
     } catch (err) {
       logger.error({ err }, "Local scheduler tick threw");
+    } finally {
+      inFlight = false;
     }
   };
 
